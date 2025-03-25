@@ -1,0 +1,359 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Email Agent</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body> -->
+    <!-- Dark Mode Toggle -->
+    <!-- <button class="dark-mode-toggle" id="dark-mode-toggle" aria-label="Toggle Dark Mode">
+        🌙
+    </button> -->
+
+    <!-- Floating Action Button (FAB) -->
+    <!-- <button class="fab" id="fab" aria-label="Add New Email">
+        <i class="fas fa-plus"></i>
+    </button>
+
+    <div class="container">
+        <h1>AI Email Agent</h1> -->
+
+        <!-- Two-Column Layout -->
+        <!-- <div class="columns">  -->
+            <!-- Left Column: Email List -->
+             <!-- <div class="column left-column">
+                <h2>Inbox</h2>
+                <button id="fetch-emails" class="btn">Refresh Emails</button>
+                <div id="email-list" class="email-list">  -->
+            <!-- Email items will be dynamically added here -->
+                <!-- </div>
+            </div>  -->
+
+            <!-- Right Column: Email Actions -->
+            <!-- <div class="column right-column">
+                <h2>Compose Email</h2>
+                <div class="card">
+                    <textarea id="prompt" placeholder="Enter your prompt (e.g., 'Write an email to thank John for the meeting')"></textarea>
+                    <button id="generate" class="btn">Generate Email</button>
+                </div>
+
+                <div class="card">
+                    <h2>Generated Email</h2>
+                    <textarea id="email-draft" readonly></textarea>
+                    <div class="button-group">
+                        <button id="edit" class="icon-btn" data-tooltip="Edit Email"><i class="fas fa-edit"></i></button>
+                        <button id="send" class="icon-btn" data-tooltip="Send Email"><i class="fas fa-paper-plane"></i></button>
+                        <button id="smart-reply" class="icon-btn" data-tooltip="Smart Reply"><i class="fas fa-reply"></i></button>
+                        <button id="summarize-email" class="icon-btn" data-tooltip="Summarize Email"><i class="fas fa-file-alt"></i></button>
+                        <button id="auto-schedule" class="icon-btn" data-tooltip="Auto Schedule"><i class="fas fa-clock"></i></button>
+                        <button id="follow-up" class="icon-btn" data-tooltip="Follow-Up Reminder"><i class="fas fa-bell"></i></button>
+                        <button id="templates" class="icon-btn" data-tooltip="Email Templates"><i class="fas fa-envelope"></i></button>
+                        <button id="sentiment" class="icon-btn" data-tooltip="Analyze Sentiment"><i class="fas fa-smile"></i></button>
+                        <button id="summarize-thread" class="icon-btn" data-tooltip="Summarize Thread"><i class="fas fa-comments"></i></button>
+                        <button id="auto-respond" class="icon-btn" data-tooltip="Auto-Respond"><i class="fas fa-reply-all"></i></button>
+                        <button id="schedule" class="icon-btn" data-tooltip="Schedule Email"><i class="fas fa-calendar-alt"></i></button>
+                        <button id="search" class="icon-btn" data-tooltip="Search Emails"><i class="fas fa-search"></i></button>
+                        <button id="create-task" class="icon-btn" data-tooltip="Create Task"><i class="fas fa-tasks"></i></button>
+                        <button id="delegate" class="icon-btn" data-tooltip="Delegate Email"><i class="fas fa-share"></i></button>
+                        <button id="analytics" class="icon-btn" data-tooltip="Email Analytics"><i class="fas fa-chart-bar"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div> -->
+
+        <!-- Loading Spinner -->
+        <!-- <div id="loading" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div> -->
+
+        <!-- Error/Success Message -->
+        <!-- <div id="message" class="message"></div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html> -->
+
+
+
+
+
+<!-- 
+
+ <!DOCTYPE html>
+ <html lang="en">
+ <head>
+     <meta charset="UTF-8">
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+     <title>AI Email Agent</title>
+     <link rel="stylesheet" href="styles.css">
+ </head>
+ <body>
+     <div class="container">
+         <h1>AI Email Agent</h1>
+         <div class="columns"> -->
+             <!-- Left Column: Inbox -->
+             <!-- <div class="column left-column">
+                 <h2>Inbox</h2>
+                 <div id="status">Not logged in.</div>
+                 <button id="login-button" class="btn">Login with Google</button>
+                 <button id="logout-button" class="btn">Logout</button>
+                 <button id="fetch-emails-button" class="btn">Refresh Emails</button>
+                 <div id="email-list" class="email-list"></div>
+             </div>
+  -->
+             <!-- Right Column: AI Features -->
+             <!-- <div class="column right-column">
+                 <h2>AI Features</h2> -->
+ 
+                 <!-- Generate Email -->
+                 <!-- <div class="card">
+                     <h3>Generate Email</h3>
+                     <textarea id="prompt" placeholder="Enter your prompt (e.g., 'Write an email to thank John for the meeting')"></textarea>
+                     <button id="generate-email-button" class="btn">Generate Email</button>
+                 </div> -->
+ 
+                 <!-- Editable Email Draft -->
+                 <!-- <div class="card">
+                     <h3>Generated Email (Editable)</h3>
+                     <textarea id="generated-email" placeholder="Generated email will appear here..." readonly></textarea>
+                     <button id="edit-email-button" class="btn">Edit Email</button>
+                     <button id="send-generated-email-button" class="btn">Send Generated Email</button>
+                 </div> -->
+ 
+                 <!-- Summarize Email -->
+                 <!-- <div class="card">
+                     <h3>Summarize Email</h3>
+                     <button id="summarize-email-button" class="btn">Summarize Selected Email</button>
+                     <div id="email-summary" class="output"></div>
+                 </div> -->
+ 
+                 <!-- Categorize Email -->
+                 <!-- <div class="card">
+                     <h3>Categorize Email</h3>
+                     <button id="categorize-email-button" class="btn">Categorize Selected Email</button>
+                     <div id="email-category" class="output"></div>
+                 </div> -->
+ 
+                 <!-- Smart Reply -->
+                 <!-- <div class="card">
+                     <h3>Smart Reply</h3>
+                     <button id="smart-reply-button" class="btn">Generate Smart Reply</button>
+                     <div id="smart-reply" class="output"></div>
+                 </div> -->
+ 
+                 <!-- Send Email Feature -->
+                 <!-- <div class="card">
+                     <h3>Compose Email</h3>
+                     <input type="email" id="recipient" placeholder="Recipient Email">
+                     <input type="text" id="subject" placeholder="Subject">
+                     <textarea id="message" placeholder="Enter your email message"></textarea>
+                     <button id="send-email-button" class="btn">Send Email</button>
+                 </div>
+             </div>
+         </div>
+     </div>
+     <script src="popup.js"></script>
+ </body>
+ </html>
+  -->
+
+
+<!-- 
+
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>AI Email Agent</title>
+      <link rel="stylesheet" href="styles.css">
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  </head>
+  <body> -->
+      <!-- Container -->
+      <!-- <div class="container"> -->
+          <!-- Top Bar (Dark Mode and Profile Dropdown) -->
+          <!-- <div class="top-bar"> -->
+              <!-- Dark Mode Toggle -->
+              <!-- <button class="dark-mode-toggle" id="dark-mode-toggle" aria-label="Toggle Dark Mode">
+                  <span class="dark-icon">🌙</span>
+                  <span class="light-icon" style="display: none;">☀️</span>
+              </button> -->
+  
+              <!-- Profile Dropdown -->
+              <!-- <div class="profile-dropdown" id="profile-dropdown">
+                  <div class="profile-icon" id="profile-icon">
+                      <i class="fas fa-user"></i>
+                  </div>
+                  <div class="profile-dropdown-content" id="profile-dropdown-content">
+                      <button id="login-button">Login with Google</button>
+                      <button id="logout-button">Logout</button>
+                  </div>
+              </div>
+          </div> -->
+  
+          <!-- User Login Status -->
+          <!-- <div class="user-status" id="user-status">
+              Not logged in.
+          </div>
+  
+          <h1>AI Email Agent</h1> -->
+  
+          <!-- Two-Column Layout -->
+          <!-- <section class="columns"> -->
+              <!-- Left Column: Email List -->
+              <!-- <section class="column left-column">
+                  <h2>Inbox</h2>
+                  <button id="fetch-emails-button" class="btn">Refresh Emails</button>
+                  <div id="email-list" class="email-list"></div>
+              </section> -->
+  
+              <!-- Right Column: AI Features -->
+              <!-- <section class="column right-column">
+                  <h2>AI Features</h2> -->
+  
+                  <!-- Generate Email -->
+                  <!-- <div class="card">
+                      <h3>Generate Email</h3>
+                      <textarea id="prompt" placeholder="Enter your prompt (e.g., 'Write an email to thank John for the meeting')"></textarea>
+                      <button id="generate-email-button" class="btn">Generate Email</button>
+                  </div>
+   -->
+                  <!-- Editable Email Draft -->
+                  <!-- <div class="card">
+                      <h3>Generated Email (Editable)</h3>
+                      <textarea id="generated-email" placeholder="Generated email will appear here..." readonly></textarea>
+                      <div class="button-group">
+                          <button id="edit-email-button" class="text-btn">Edit Email</button>
+                          <button id="send-generated-email-button" class="text-btn">Send Email</button>
+                      </div>
+                  </div>
+              </section>
+          </section> -->
+  
+          <!-- Loading Spinner -->
+          <!-- <div id="loading" class="loading-spinner">
+              <div class="spinner"></div>
+              <p>Processing...</p>
+          </div> -->
+  
+          <!-- Notification Message -->
+          <!-- <div id="message" class="message"></div>
+      </div>
+  
+      <script src="popup.js"></script>
+  </body>
+  </html> -->
+
+
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>AI Email Agent</title>
+      <link rel="stylesheet" href="styles.css">
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  </head>
+  <body>
+      <!-- Container -->
+      <div class="container">
+          <!-- Top Bar (Dark Mode and Profile Dropdown) -->
+          <div class="top-bar">
+              <button class="dark-mode-toggle" id="dark-mode-toggle" aria-label="Toggle Dark Mode">
+                  <span class="dark-icon">🌙</span>
+                  <span class="light-icon" style="display: none;">☀️</span>
+              </button>
+              <div class="profile-dropdown" id="profile-dropdown">
+                  <div class="profile-icon" id="profile-icon" title="User Profile">
+                      <i class="fas fa-user"></i>
+                  </div>
+                  <div class="profile-dropdown-content" id="profile-dropdown-content">
+                      <div class="profile-info" id="profile-info" style="display: none;">
+                          <span id="user-name"></span>
+                          <span id="user-email" class="email-text"></span>
+                      </div>
+                      <button id="login-button" class="dropdown-btn">Login with Google</button>
+                      <button id="logout-button" class="dropdown-btn">Logout</button>
+                      <button id="settings-button" class="dropdown-btn">Settings</button>
+                  </div>
+              </div>
+          </div>
+  
+          <!-- User Login Status -->
+          <div class="user-status" id="user-status">
+              <span>Not logged in.</span>
+          </div>
+  
+          <h1>AI Email Agent</h1>
+  
+          <!-- Two-Column Layout -->
+          <section class="columns">
+              <section class="column left-column">
+                  <h2>Inbox</h2>
+                  <button id="fetch-emails-button" class="btn">Refresh Emails</button>
+                  <div id="email-list" class="email-list"></div>
+              </section>
+              <section class="column right-column">
+                  <h2>AI Features</h2>
+                  <div class="card">
+                      <h3>Generate Email</h3>
+                      <textarea id="prompt" placeholder="Enter your prompt (e.g., 'Write an email to thank John for the meeting')"></textarea>
+                      <button id="generate-email-button" class="btn">Generate Email</button>
+                  </div>
+                  <div class="card">
+                      <h3>Generated Email (Editable)</h3>
+                      <textarea id="generated-email" placeholder="Generated email will appear here..." readonly></textarea>
+                      <div class="button-group">
+                          <button id="edit-email-button" class="text-btn">Edit Email</button>
+                          <button id="send-generated-email-button" class="text-btn">Send Email</button>
+                      </div>
+                  </div>
+              </section>
+          </section>
+  
+          <!-- Email Composer Modal -->
+          <div id="email-composer-modal" class="modal" style="display: none;">
+              <div class="modal-content">
+                  <span id="close-modal" class="close">&times;</span>
+                  <h2>Compose Email</h2>
+                  <div class="email-form">
+                      <label for="recipient-input">To:</label>
+                      <input type="email" id="recipient-input" placeholder="recipient@example.com" required>
+                      <label for="subject-input">Subject:</label>
+                      <input type="text" id="subject-input" placeholder="Enter subject" required>
+                      <label for="message-input">Message:</label>
+                      <div class="formatting-toolbar">
+                          <button id="bold-button" class="format-btn" title="Bold"><i class="fas fa-bold"></i></button>
+                          <button id="italic-button" class="format-btn" title="Italic"><i class="fas fa-italic"></i></button>
+                      </div>
+                      <textarea id="message-input" placeholder="Enter your message"></textarea>
+                      <div class="button-group">
+                          <button id="send-email-button" class="btn">Send</button>
+                          <button id="save-draft-button" class="btn secondary">Save Draft</button>
+                      </div>
+                  </div>
+              </div>
+          </div>
+  
+          <!-- Loading Spinner -->
+          <div id="loading" class="loading-spinner">
+              <div class="spinner"></div>
+              <p>Processing...</p>
+          </div>
+  
+          <!-- Notification Message -->
+          <div id="message" class="message"></div>
+      </div>
+  
+      <script src="popup.js"></script>
+  </body>
+  </html>
