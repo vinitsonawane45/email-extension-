@@ -1,0 +1,12 @@
+Flask
+Flask-Cors
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+gunicorn
+cachetools
+aiohttp
+asyncio
+python-dotenv
+hypercorn
