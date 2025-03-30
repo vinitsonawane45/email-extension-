@@ -1,1 +1,1 @@
-web: gunicorn flsk:app
+web: hypercorn flsk:app --bind 0.0.0.0:$PORT
