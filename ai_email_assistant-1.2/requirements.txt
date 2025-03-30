@@ -10,3 +10,4 @@ aiohttp
 asyncio
 python-dotenv
 hypercorn
+flask[async]
