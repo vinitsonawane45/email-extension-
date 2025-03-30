@@ -295,7 +295,6 @@
 
 
 
-
 import asyncio
 import aiohttp
 import logging
@@ -320,13 +319,13 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": os.getenv("ALLOWED_ORIGINS", "*")}})
+CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email-extension-production.up.railway.app", "http://localhost:*"]}})
 
 # Environment Variables
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")  # Default to localhost if not set
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongo:CZRyLpoTQNPPeQpcoMPyjYwNIoBmCdbi@shinkansen.proxy.rlwy.net:14794")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -339,8 +338,7 @@ try:
     users_collection = db.users
     emails_collection = db.emails
     templates_collection = db.templates
-    # Test connection
-    client.server_info()  # This will raise an exception if connection fails
+    client.server_info()
     logger.info("Connected to MongoDB successfully at {}".format(MONGO_URI))
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
@@ -373,7 +371,7 @@ def get_credentials(access_token, refresh_token):
         )
         
         if creds.expired and creds.refresh_token:
-            logger.debug("Access token expired, attempting to refresh")
+            logger.debug("Access token expired, refreshing...")
             creds.refresh(Request())
             logger.info("Access token refreshed successfully")
             access_token = creds.token
@@ -385,6 +383,9 @@ def get_credentials(access_token, refresh_token):
                 )
                 logger.info(f"Updated access token in database for {user['email']}")
         
+        # Verify token validity
+        service = build('gmail', 'v1', credentials=creds)
+        service.users().getProfile(userId='me').execute()  # Test token
         return creds, access_token
     except Exception as e:
         logger.error(f"Credential error: {str(e)}", exc_info=True)
@@ -683,6 +684,11 @@ async def send_email_endpoint():
         if "Authentication failed" in str(e):
             return jsonify({"error": str(e)}), 401
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+
+@app.errorhandler(404)
+def not_found(error):
+    logger.error(f"404 error: {request.path}")
+    return jsonify({"error": "Not found"}), 404
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
