@@ -266,13 +266,29 @@ async def send_email_endpoint():
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 # Main entry point for async server
+# async def main():
+#     from hypercorn.config import Config
+#     from hypercorn.asyncio import serve
+#     config = Config()
+#     config.bind = ["127.0.0.1:5000"]
+#     config.workers = 1  # Single worker to simplify loop management
+#     await serve(app, config)
+
+# if __name__ == '__main__':
+#     asyncio.run(main())
+
 async def main():
     from hypercorn.config import Config
     from hypercorn.asyncio import serve
+    import os
+
     config = Config()
-    config.bind = ["127.0.0.1:5000"]
+    port = os.environ.get("PORT", "5000")  # Use Railway-assigned port
+    config.bind = [f"0.0.0.0:{port}"]
     config.workers = 1  # Single worker to simplify loop management
+
     await serve(app, config)
 
 if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())
