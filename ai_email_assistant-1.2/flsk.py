@@ -294,7 +294,6 @@
 #     asyncio.run(main())
 
 
-
 import asyncio
 import aiohttp
 import logging
@@ -325,7 +324,7 @@ CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-production-e78b.up.railway.app")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongo:CZRyLpoTQNPPeQpcoMPyjYwNIoBmCdbi@shinkansen.proxy.rlwy.net:14794")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -333,12 +332,15 @@ AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 
 # Database Configuration
 try:
+    logger.info(f"Attempting to connect to MongoDB with URI: {MONGO_URI}")
+    if not MONGO_URI.startswith("mongodb://") and not MONGO_URI.startswith("mongodb+srv://"):
+        raise ValueError(f"Invalid MONGO_URI: '{MONGO_URI}' must start with 'mongodb://' or 'mongodb+srv://'")
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     users_collection = db.users
     emails_collection = db.emails
     templates_collection = db.templates
-    client.server_info()
+    client.server_info()  # Test connection
     logger.info("Connected to MongoDB successfully at {}".format(MONGO_URI))
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
@@ -383,9 +385,8 @@ def get_credentials(access_token, refresh_token):
                 )
                 logger.info(f"Updated access token in database for {user['email']}")
         
-        # Verify token validity
         service = build('gmail', 'v1', credentials=creds)
-        service.users().getProfile(userId='me').execute()  # Test token
+        service.users().getProfile(userId='me').execute()
         return creds, access_token
     except Exception as e:
         logger.error(f"Credential error: {str(e)}", exc_info=True)
@@ -432,8 +433,13 @@ async def fetch_emails(access_token, refresh_token):
                 'date': headers.get('Date', ''),
                 'snippet': msg.get('snippet', '')
             }
-            email_data['category'] = await categorize_email(email_data['snippet'])
-            email_data['summary'] = await summarize_email(email_data['snippet'])
+            try:
+                email_data['category'] = await categorize_email(email_data['snippet'])
+                email_data['summary'] = await summarize_email(email_data['snippet'])
+            except Exception as e:
+                logger.warning(f"AI features unavailable: {str(e)}. Proceeding without categorization/summary.")
+                email_data['category'] = 'Other'
+                email_data['summary'] = email_data['snippet'][:100] + '...'
             emails.append(email_data)
             save_email_to_db(email_data)
         
