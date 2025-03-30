@@ -17,8 +17,8 @@ body {
 }
 
 body.dark-mode {
-    background: linear-gradient(135deg, #1a1a2e, #16213e);
-    color: #e0e0e0;
+    background: linear-gradient(135deg, #1a1a2e, #0f3460, #16213e);
+    color: #f0f4f8;
 }
 
 /* Container */
@@ -31,6 +31,7 @@ body.dark-mode {
     max-width: 1000px;
     margin: auto;
     transition: background 0.5s, box-shadow 0.3s;
+    position: relative;
 }
 
 body.dark-mode .container {
@@ -167,7 +168,7 @@ body.dark-mode .profile-info .email-text {
 }
 
 body.dark-mode .dropdown-btn {
-    color: #ecf0f1;
+    color: #f0f4f8;
 }
 
 body.dark-mode .dropdown-btn:hover, body.dark-mode .dropdown-btn:focus {
@@ -187,7 +188,7 @@ body.dark-mode .dropdown-btn:hover, body.dark-mode .dropdown-btn:focus {
 }
 
 body.dark-mode .profile-icon.initials {
-    color: #ecf0f1;
+    color: #f0f4f8;
 }
 
 body.dark-mode .profile-icon.initials:hover {
@@ -212,7 +213,7 @@ body.dark-mode .profile-icon.initials:hover {
 
 body.dark-mode .user-status {
     background: rgba(44, 62, 80, 0.8);
-    color: #ecf0f1;
+    color: #f0f4f8;
 }
 
 .user-status .email-text {
@@ -227,11 +228,12 @@ body.dark-mode .user-status .email-text {
 /* Header */
 h1 {
     font-family: 'Roboto', sans-serif;
-    font-weight: 600;
-    font-size: 2.5rem;
+    font-weight: 700;
+    font-size: 3rem;
     color: #34495e;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    margin-bottom: 20px;
+    margin-bottom: 30px;
+    text-align: center;
 }
 
 body.dark-mode h1 {
@@ -242,31 +244,100 @@ body.dark-mode h1 {
 .columns {
     display: flex;
     gap: 20px;
+    flex-wrap: wrap;
 }
 
 .column {
     flex: 1;
 }
 
-.left-column, .right-column {
+.left-column {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(15px);
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    transition: background 0.5s, box-shadow 0.3s;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+body.dark-mode .left-column {
+    background: rgba(26, 26, 46, 0.95);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.right-column {
     background: rgba(255, 255, 255, 0.8);
     backdrop-filter: blur(15px);
     border-radius: 15px;
     padding: 25px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     transition: background 0.5s, box-shadow 0.3s;
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
 }
 
-body.dark-mode .left-column, body.dark-mode .right-column {
+body.dark-mode .right-column {
     background: rgba(26, 26, 46, 0.8);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
+/* Email Filters */
+.email-filters {
+    display: flex;
+    gap: 10px;
+    background: rgba(240, 244, 248, 0.8);
+    padding: 10px;
+    border-radius: 10px;
+    justify-content: center;
+}
+
+body.dark-mode .email-filters {
+    background: rgba(44, 62, 80, 0.8);
+}
+
+.filter-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.filter-btn.active, .filter-btn:hover {
+    background: #3498db;
+    color: white;
+    box-shadow: 0 4px 10px rgba(52, 152, 219, 0.3);
+}
+
+body.dark-mode .filter-btn {
+    background: rgba(52, 73, 94, 0.9);
+}
+
+body.dark-mode .filter-btn.active, body.dark-mode .filter-btn:hover {
+    background: #74b9ff;
+}
+
 /* Email List */
 .email-list {
+    flex-grow: 1;
     max-height: 400px;
     overflow-y: auto;
-    margin-top: 15px;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.5);
+}
+
+body.dark-mode .email-list {
+    background: rgba(44, 62, 80, 0.5);
 }
 
 .email-item {
@@ -277,6 +348,8 @@ body.dark-mode .left-column, body.dark-mode .right-column {
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
     transition: all 0.3s ease;
     cursor: pointer;
+    animation: fadeIn 0.3s ease-in;
+    border-left: 4px solid transparent;
 }
 
 .email-item:hover {
@@ -286,16 +359,64 @@ body.dark-mode .left-column, body.dark-mode .right-column {
 
 .email-item.selected {
     background: rgba(52, 152, 219, 0.1);
-    border-left: 3px solid #3498db;
+    border-left: 4px solid #3498db;
 }
 
 body.dark-mode .email-item {
-    background: rgba(44, 62, 80, 0.9);
+    background: rgba(52, 73, 94, 0.9);
 }
 
 body.dark-mode .email-item.selected {
     background: rgba(116, 185, 255, 0.1);
-    border-left: 3px solid #74b9ff;
+    border-left: 4px solid #74b9ff;
+}
+
+.email-item strong {
+    display: block;
+    font-size: 16px;
+    margin-bottom: 5px;
+}
+
+.email-item p {
+    font-size: 14px;
+    color: #7f8c8d;
+}
+
+body.dark-mode .email-item p {
+    color: #bdc3c7;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Email Content */
+#email-content {
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.8;
+}
+
+body.dark-mode #email-content {
+    background: rgba(52, 73, 94, 0.9);
+}
+
+#email-content a {
+    color: #3498db;
+    text-decoration: underline;
+}
+
+body.dark-mode #email-content a {
+    color: #74b9ff;
+}
+
+#email-content img {
+    max-width: 100%;
+    border-radius: 5px;
+    margin: 10px 0;
 }
 
 /* Buttons */
@@ -308,7 +429,6 @@ body.dark-mode .email-item.selected {
     font-weight: 500;
     cursor: pointer;
     transition: all 0.4s ease;
-    margin-top: 15px;
     box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
 }
 
@@ -318,9 +438,18 @@ body.dark-mode .email-item.selected {
     box-shadow: 0 6px 20px rgba(52, 152, 219, 0.5);
 }
 
+.btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 10px rgba(52, 152, 219, 0.3);
+}
+
 body.dark-mode .btn {
     background: linear-gradient(135deg, #74b9ff, #3498db);
     color: #2c3e50;
+}
+
+body.dark-mode .btn:hover {
+    box-shadow: 0 6px 20px rgba(116, 185, 255, 0.5), 0 0 15px rgba(116, 185, 255, 0.2);
 }
 
 .btn.secondary {
@@ -357,7 +486,10 @@ body.dark-mode .text-btn {
 
 /* Card */
 .card {
-    margin-top: 20px;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
 }
 
 .card h3 {
@@ -367,7 +499,112 @@ body.dark-mode .text-btn {
 }
 
 body.dark-mode .card h3 {
-    color: #ecf0f1;
+    color: #f0f4f8;
+}
+
+/* Generate Email Card Specific Styles */
+.card:nth-child(1) {
+    order: 1;
+}
+
+/* Textarea in Generate Email */
+#prompt {
+    width: 100%;
+    min-height: 100px;
+    margin: 0;
+    padding: 15px;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+    font-size: 15px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #2c3e50;
+    transition: all 0.3s ease;
+    outline: none;
+    resize: vertical;
+}
+
+#prompt:focus {
+    border-color: #3498db;
+    box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+    background: rgba(255, 255, 255, 1);
+}
+
+body.dark-mode #prompt {
+    background: rgba(52, 73, 94, 0.9);
+    color: #f0f4f8;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+body.dark-mode #prompt:focus {
+    border-color: #74b9ff;
+    box-shadow: 0 0 10px rgba(116, 185, 255, 0.3);
+}
+
+/* AI Suggestions */
+.ai-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0;
+}
+
+.suggestion-chip {
+    padding: 6px 12px;
+    border: 1px solid #3498db;
+    border-radius: 15px;
+    background: transparent;
+    color: #3498db;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.suggestion-chip:hover {
+    background: #3498db;
+    color: white;
+}
+
+body.dark-mode .suggestion-chip {
+    border: 1px solid #74b9ff;
+    color: #74b9ff;
+}
+
+body.dark-mode .suggestion-chip:hover {
+    background: #74b9ff;
+    color: #2c3e50;
+}
+
+/* Generate Email Button */
+#generate-email-button {
+    padding: 12px 25px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    color: white;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.4s ease;
+    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+    align-self: flex-start;
+}
+
+#generate-email-button:hover {
+    background: linear-gradient(135deg, #2980b9, #1f618d);
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(52, 152, 219, 0.5);
+}
+
+body.dark-mode #generate-email-button {
+    background: linear-gradient(135deg, #74b9ff, #3498db);
+    color: #2c3e50;
+}
+
+/* Ensure other cards follow properly */
+.card:nth-child(2) {
+    order: 2;
+}
+
+.card:nth-child(3) {
+    order: 3;
 }
 
 /* Textbox */
@@ -398,7 +635,7 @@ textarea::placeholder {
 
 body.dark-mode textarea {
     background: rgba(52, 73, 94, 0.9);
-    color: #ecf0f1;
+    color: #f0f4f8;
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -407,42 +644,136 @@ body.dark-mode textarea:focus {
     box-shadow: 0 0 10px rgba(116, 185, 255, 0.3);
 }
 
-/* Speech Settings */
-.speech-settings {
-    margin-top: 20px;
-    padding: 15px;
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
     background: rgba(255, 255, 255, 0.9);
-    border-radius: 10px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    padding: 20px;
+    border-radius: 15px;
+    width: 90%;
+    max-width: 600px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
+    position: relative;
 }
 
-body.dark-mode .speech-settings {
-    background: rgba(44, 62, 80, 0.9);
+body.dark-mode .modal-content {
+    background: rgba(26, 26, 46, 0.95);
 }
 
-.speech-settings label {
-    display: block;
-    margin: 10px 0;
+.close {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 24px;
+    cursor: pointer;
     color: #34495e;
 }
 
-body.dark-mode .speech-settings label {
-    color: #ecf0f1;
+body.dark-mode .close {
+    color: #f0f4f8;
 }
 
-.speech-settings select, .speech-settings input[type="range"] {
+.email-form label, .settings-form label {
+    display: block;
+    margin: 10px 0 5px;
+    color: #34495e;
+}
+
+body.dark-mode .email-form label, body.dark-mode .settings-form label {
+    color: #f0f4f8;
+}
+
+.email-form input[type="email"],
+.email-form input[type="text"],
+.settings-form select,
+.settings-form input[type="range"] {
     width: 100%;
-    padding: 5px;
-    margin-top: 5px;
-    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 10px;
     border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #2c3e50;
 }
 
-body.dark-mode .speech-settings select, 
-body.dark-mode .speech-settings input[type="range"] {
+body.dark-mode .email-form input[type="email"],
+body.dark-mode .email-form input[type="text"],
+body.dark-mode .settings-form select,
+body.dark-mode .settings-form input[type="range"] {
     background: rgba(52, 73, 94, 0.9);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #ecf0f1;
+    color: #f0f4f8;
+}
+
+.settings-form h3 {
+    margin-top: 20px;
+    font-size: 1.2rem;
+    color: #34495e;
+}
+
+body.dark-mode .settings-form h3 {
+    color: #f0f4f8;
+}
+
+.settings-form input[type="checkbox"] {
+    margin-left: 5px;
+}
+
+.settings-form label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.settings-form label span#speed-value {
+    margin-left: 10px;
+    font-size: 14px;
+    color: #34495e;
+}
+
+body.dark-mode .settings-form label span#speed-value {
+    color: #f0f4f8;
+}
+
+.formatting-toolbar {
+    margin: 10px 0;
+}
+
+.format-btn {
+    background: none;
+    border: none;
+    padding: 5px;
+    cursor: pointer;
+    color: #34495e;
+    transition: color 0.3s ease;
+}
+
+.format-btn:hover {
+    color: #3498db;
+}
+
+body.dark-mode .format-btn {
+    color: #f0f4f8;
+}
+
+body.dark-mode .format-btn:hover {
+    color: #74b9ff;
 }
 
 /* Loading Spinner */
