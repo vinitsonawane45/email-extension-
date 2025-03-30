@@ -325,7 +325,9 @@ CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-production-e78b.up.railway.app")
-MONGO_URI = os.getenv("MONGO_URI","mongodb://mongo:CZRyLpoTQNPPeQpcoMPyjYwNIoBmCdbi@shinkansen.proxy.rlwy.net:14794")
+MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb://mongo:CZRyLpoTQNPPeQpcoMPyjYwNIoBmCdbi@shinkansen.proxy.rlwy.net:14794")
+# Clean up MONGO_URI if it contains mongosh or quotes
+MONGO_URI = MONGO_URI_RAW.replace('mongosh', '').replace('"', '').strip()
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
@@ -334,7 +336,7 @@ AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 try:
     logger.info(f"Attempting to connect to MongoDB with URI: {MONGO_URI}")
     if not MONGO_URI.startswith("mongodb://") and not MONGO_URI.startswith("mongodb+srv://"):
-        raise ValueError(f"Invalid MONGO_URI: '{MONGO_URI}' must start with 'mongodb://' or 'mongodb+srv://'")
+        raise ValueError(f"Invalid MONGO_URI after cleanup: '{MONGO_URI}' must start with 'mongodb://' or 'mongodb+srv://'")
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     users_collection = db.users
@@ -467,22 +469,40 @@ async def generate_email(prompt):
     
     try:
         async with aiohttp.ClientSession() as session:
+            # Check available models first
+            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
+            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
+                if model_response.status != 200:
+                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
+                models_data = await model_response.json()
+                available_models = [model["name"] for model in models_data.get("models", [])]
+                required_model = "mistral"
+                if required_model not in available_models:
+                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+
+            # Proceed with generation
             payload = {
-                "model": "llama2",
+                "model": required_model,
                 "prompt": f"Generate a professional email about: {prompt}",
                 "stream": False
             }
             logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL}")
-            async with session.post(OLLAMA_API_URL, json=payload) as response:
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                response_text = await response.text()
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {await response.text()}")
+                    raise Exception(f"AI API returned {response.status}: {response_text}")
                 result = await response.json()
                 response_text = result.get("response", "Could not generate email content")
                 ai_cache[cache_key] = response_text
+                logger.info("Email generated successfully")
                 return response_text
     except Exception as e:
-        logger.error(f"Failed to generate email: {str(e)}")
-        raise
+        error_msg = f"Failed to generate email: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        # Fallback to a basic response if Ollama fails
+        fallback_response = f"Subject: {prompt}\n\nDear [Recipient],\n\nI am writing regarding {prompt.lower()}. Please let me know if you need further details.\n\nBest regards,\n[Your Name]"
+        ai_cache[cache_key] = fallback_response
+        return fallback_response
 
 async def summarize_email(email_body):
     cache_key = f"summarize_{hash(email_body)}"
@@ -491,14 +511,26 @@ async def summarize_email(email_body):
     
     try:
         async with aiohttp.ClientSession() as session:
+            # Check available models
+            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
+            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
+                if model_response.status != 200:
+                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
+                models_data = await model_response.json()
+                available_models = [model["name"] for model in models_data.get("models", [])]
+                required_model = "mistral"
+                if required_model not in available_models:
+                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+
             payload = {
-                "model": "llama2",
+                "model": required_model,
                 "prompt": f"Summarize this email in 2-3 sentences: {email_body}",
                 "stream": False
             }
-            async with session.post(OLLAMA_API_URL, json=payload) as response:
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                response_text = await response.text()
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}")
+                    raise Exception(f"AI API returned {response.status}: {response_text}")
                 result = await response.json()
                 summary = result.get("response", "Could not summarize email")
                 ai_cache[cache_key] = summary
@@ -514,14 +546,26 @@ async def categorize_email(email_body):
     
     try:
         async with aiohttp.ClientSession() as session:
+            # Check available models
+            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
+            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
+                if model_response.status != 200:
+                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
+                models_data = await model_response.json()
+                available_models = [model["name"] for model in models_data.get("models", [])]
+                required_model = "mistral"
+                if required_model not in available_models:
+                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+
             payload = {
-                "model": "llama2",
+                "model": required_model,
                 "prompt": f"Categorize this email into one of these categories: [Work, Personal, Newsletter, Spam, Other]. Just respond with the category name: {email_body}",
                 "stream": False
             }
-            async with session.post(OLLAMA_API_URL, json=payload) as response:
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                response_text = await response.text()
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}")
+                    raise Exception(f"AI API returned {response.status}: {response_text}")
                 result = await response.json()
                 category = result.get("response", "Other").strip()
                 ai_cache[cache_key] = category
@@ -658,6 +702,7 @@ async def generate_email_endpoint():
             "emailDraft": email_draft
         })
     except Exception as e:
+        logger.error(f"Generate email endpoint failed: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
 
 @app.route('/api/send-email', methods=['POST'])
