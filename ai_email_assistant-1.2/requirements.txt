@@ -6,7 +6,7 @@ google-auth-httplib2
 google-api-python-client
 gunicorn
 cachetools
-aiohttp
+aiohttp==3.9.1
 asyncio
 python-dotenv
 hypercorn
