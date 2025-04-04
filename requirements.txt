@@ -1,0 +1,14 @@
+Flask
+Flask-Cors
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+gunicorn
+cachetools
+aiohttp==3.9.1
+asyncio
+python-dotenv
+hypercorn
+flask[async]
+pymongo
