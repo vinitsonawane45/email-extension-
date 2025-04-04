@@ -16,7 +16,7 @@
   "host_permissions": [
     "https://mail.google.com/*",
     "http://localhost:*/",
-    "https://email-extension-production.up.railway.app/*",
+    "https://email-extension.onrender.com/*",
     "https://www.googleapis.com/*",
     "https://oauth2.googleapis.com/*",
     "https://accounts.google.com/*"
