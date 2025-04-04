@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Email Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="top-bar">
+            <button class="dark-mode-toggle" id="dark-mode-toggle" aria-label="Toggle Dark Mode">
+                <span class="dark-icon">🌙</span>
+                <span class="light-icon" style="display: none;">☀️</span>
+            </button>
+            <div class="profile-dropdown" id="profile-dropdown">
+                <div class="profile-icon" id="profile-icon" title="User Profile">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div class="profile-dropdown-content" id="profile-dropdown-content">
+                    <div class="profile-info" id="profile-info" style="display: none;">
+                        <span id="user-name"></span>
+                        <span id="user-email" class="email-text"></span>
+                    </div>
+                    <button id="login-button" class="dropdown-btn">Login with Google</button>
+                    <button id="logout-button" class="dropdown-btn">Logout</button>
+                    <button id="settings-button" class="dropdown-btn">Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="user-status" id="user-status">
+            <span>Not logged in.</span>
+        </div>
+
+        <h1>AI Email Agent</h1>
+
+        <section class="columns">
+            <section class="column left-column">
+                <h2>Inbox</h2>
+                <div class="email-filters">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="unread">Unread</button>
+                    <button class="filter-btn" data-filter="sent">Sent</button>
+                </div>
+                <button id="fetch-emails-button" class="btn">Get New Email</button>
+                <div id="email-list" class="email-list"></div>
+            </section>
+            <section class="column right-column">
+                <h2>AI Features</h2>
+                <div class="card">
+                    <h3>Generate Email</h3>
+                    <textarea id="prompt" placeholder="Enter your prompt (e.g., 'Write an email to thank John for the meeting')"></textarea>
+                    <div class="ai-suggestions">
+                        <button class="suggestion-chip" data-prompt="Write a polite follow-up email">Follow-Up</button>
+                        <button class="suggestion-chip" data-prompt="Draft a meeting invite">Meeting</button>
+                        <button class="suggestion-chip" data-prompt="Compose a thank-you note">Thank You</button>
+                    </div>
+                    <button id="generate-email-button" class="btn">Generate Email</button>
+                </div>
+                <div class="card">
+                    <h3>Generated Email (Editable)</h3>
+                    <textarea id="generated-email" placeholder="Generated email will appear here..." readonly></textarea>
+                    <div class="button-group">
+                        <button id="edit-email-button" class="text-btn">Edit Email</button>
+                        <button id="send-generated-email-button" class="text-btn">Send Email</button>
+                    </div>
+                </div>
+                <div class="card" id="email-details" style="display: none;">
+                    <h3>Email Details</h3>
+                    <div id="email-content"></div>
+                </div>
+            </section>
+        </section>
+
+        <!-- Email Composer Modal -->
+        <div id="email-composer-modal" class="modal">
+            <div class="modal-content">
+                <span id="close-modal" class="close">×</span>
+                <h2>Compose Email</h2>
+                <div class="email-form">
+                    <label for="recipient-input">To:</label>
+                    <input type="email" id="recipient-input" placeholder="recipient@example.com" required>
+                    <label for="subject-input">Subject:</label>
+                    <input type="text" id="subject-input" placeholder="Enter subject" required>
+                    <label for="message-input">Message:</label>
+                    <div class="formatting-toolbar">
+                        <button id="bold-button" class="format-btn" title="Bold"><i class="fas fa-bold"></i></button>
+                        <button id="italic-button" class="format-btn" title="Italic"><i class="fas fa-italic"></i></button>
+                    </div>
+                    <textarea id="message-input" placeholder="Enter your message"></textarea>
+                    <div class="button-group">
+                        <button id="send-email-button" class="btn">Send</button>
+                        <button id="save-draft-button" class="btn secondary">Save Draft</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <span id="close-settings-modal" class="close">×</span>
+                <h2>Settings</h2>
+                <div class="settings-form">
+                    <h3>Speech Settings</h3>
+                    <label>
+                        Voice:
+                        <select id="voice-select"></select>
+                    </label>
+                    <label>
+                        Speed:
+                        <input type="range" id="speech-speed" min="0.5" max="2" step="0.1" value="1">
+                        <span id="speed-value">1</span>
+                    </label>
+                    <label>
+                        Include Subjects: <input type="checkbox" id="include-subjects" checked>
+                    </label>
+                    <h3>Notification Preferences</h3>
+                    <label>
+                        Enable Notifications: <input type="checkbox" id="enable-notifications" checked>
+                    </label>
+                    <button id="save-settings-button" class="btn">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="loading" class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Processing...</p>
+        </div>
+
+        <div id="message" class="message"></div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
