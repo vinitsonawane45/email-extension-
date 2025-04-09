@@ -22,14 +22,14 @@
 # load_dotenv()
 
 # app = Flask(__name__)
-# CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email-extension-production.up.railway.app", "http://localhost:*"]}})
+# CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email-extension.onrender.com", "http://localhost:*"]}})
 
 # # Environment Variables
 # CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 # CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # TOKEN_URI = "https://oauth2.googleapis.com/token"
-# OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-production-e78b.up.railway.app")
-# MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb://mongo:CZRyLpoTQNPPeQpcoMPyjYwNIoBmCdbi@shinkansen.proxy.rlwy.net:14794")
+# OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama.onrender.com")
+# MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 # # Clean up MONGO_URI if it contains mongosh or quotes
 # MONGO_URI = MONGO_URI_RAW.replace('mongosh', '').replace('"', '').strip()
 # DB_NAME = "ai_email_agent"
@@ -184,10 +184,15 @@
 #                 if required_model not in available_models:
 #                     raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
 
-#             # Proceed with generation
+#             # Improved prompt for professional email generation
 #             payload = {
 #                 "model": required_model,
-#                 "prompt": f"Generate a professional email about: {prompt}",
+#                 "prompt": (
+#                     f"Generate a professional email with a clear subject line and body based on the following request: '{prompt}'. "
+#                     f"Include a formal greeting (e.g., 'Dear [Recipient]'), a concise and polite message tailored to the context, "
+#                     f"and a professional closing (e.g., 'Best regards, [Your Name]'). Ensure the tone is appropriate for a business setting, "
+#                     f"and format the email with 'Subject:' followed by the subject line, then the body on new lines."
+#                 ),
 #                 "stream": False
 #             }
 #             logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL}")
@@ -203,8 +208,14 @@
 #     except Exception as e:
 #         error_msg = f"Failed to generate email: {str(e)}"
 #         logger.error(error_msg, exc_info=True)
-#         # Fallback to a basic response if Ollama fails
-#         fallback_response = f"Subject: {prompt}\n\nDear [Recipient],\n\nI am writing regarding {prompt.lower()}. Please let me know if you need further details.\n\nBest regards,\n[Your Name]"
+#         # Improved fallback response
+#         fallback_response = (
+#             f"Subject: Regarding {prompt}\n\n"
+#             f"Dear [Recipient],\n\n"
+#             f"I hope this message finds you well. I am writing to discuss {prompt.lower()}. "
+#             f"Please feel free to reach out if you require additional information or clarification.\n\n"
+#             f"Best regards,\n[Your Name]"
+#         )
 #         ai_cache[cache_key] = fallback_response
 #         return fallback_response
 
@@ -484,9 +495,8 @@ CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama.onrender.com")
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-on-render.onrender.com")
 MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-# Clean up MONGO_URI if it contains mongosh or quotes
 MONGO_URI = MONGO_URI_RAW.replace('mongosh', '').replace('"', '').strip()
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -496,14 +506,14 @@ AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 try:
     logger.info(f"Attempting to connect to MongoDB with URI: {MONGO_URI}")
     if not MONGO_URI.startswith("mongodb://") and not MONGO_URI.startswith("mongodb+srv://"):
-        raise ValueError(f"Invalid MONGO_URI after cleanup: '{MONGO_URI}' must start with 'mongodb://' or 'mongodb+srv://'")
+        raise ValueError(f"Invalid MONGO_URI: {MONGO_URI}")
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     users_collection = db.users
     emails_collection = db.emails
     templates_collection = db.templates
-    client.server_info()  # Test connection
-    logger.info("Connected to MongoDB successfully at {}".format(MONGO_URI))
+    client.server_info()
+    logger.info("Connected to MongoDB successfully")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
     raise
@@ -537,7 +547,6 @@ def get_credentials(access_token, refresh_token):
         if creds.expired and creds.refresh_token:
             logger.debug("Access token expired, refreshing...")
             creds.refresh(Request())
-            logger.info("Access token refreshed successfully")
             access_token = creds.token
             user = users_collection.find_one({"email": {"$exists": True}, "refreshToken": refresh_token})
             if user:
@@ -629,7 +638,7 @@ async def generate_email(prompt):
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Check available models first
+            # Check available models
             logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
             async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
                 if model_response.status != 200:
@@ -637,23 +646,27 @@ async def generate_email(prompt):
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
                 required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+                matching_model = next((m for m in available_models if m.startswith(required_model)), None)
+                if not matching_model:
+                    raise Exception(f"No model matching '{required_model}' found in {available_models}")
+                logger.debug(f"Using model: {matching_model}")
 
-            # Improved prompt for professional email generation
+            # Improved prompt for clarity
             payload = {
-                "model": required_model,
+                "model": matching_model,
                 "prompt": (
-                    f"Generate a professional email with a clear subject line and body based on the following request: '{prompt}'. "
-                    f"Include a formal greeting (e.g., 'Dear [Recipient]'), a concise and polite message tailored to the context, "
-                    f"and a professional closing (e.g., 'Best regards, [Your Name]'). Ensure the tone is appropriate for a business setting, "
-                    f"and format the email with 'Subject:' followed by the subject line, then the body on new lines."
+                    f"Generate a professional email based on this request: '{prompt}'. "
+                    f"Include a clear, concise subject line starting with 'Subject:', "
+                    f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
+                    f"and a professional closing (e.g., 'Best regards, [Your Name]'). "
+                    f"Format it as plain text with line breaks for readability."
                 ),
                 "stream": False
             }
-            logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL}")
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL} with payload: {payload}")
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
                 response_text = await response.text()
+                logger.debug(f"API response: {response.status} - {response_text}")
                 if response.status != 200:
                     raise Exception(f"AI API returned {response.status}: {response_text}")
                 result = await response.json()
@@ -664,12 +677,16 @@ async def generate_email(prompt):
     except Exception as e:
         error_msg = f"Failed to generate email: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        # Improved fallback response
+        # Improved context-aware fallback
+        fallback_subject = "Polite Follow-Up" if "follow-up" in prompt.lower() else f"Regarding {prompt}"
+        fallback_body = (
+            "I hope you’re doing well. I’m writing to kindly follow up on our previous interaction. "
+            "Please let me know if there’s anything I can assist with or if you have any updates."
+        ) if "follow-up" in prompt.lower() else f"I am writing regarding {prompt.lower()}."
         fallback_response = (
-            f"Subject: Regarding {prompt}\n\n"
+            f"Subject: {fallback_subject}\n\n"
             f"Dear [Recipient],\n\n"
-            f"I hope this message finds you well. I am writing to discuss {prompt.lower()}. "
-            f"Please feel free to reach out if you require additional information or clarification.\n\n"
+            f"{fallback_body} Please feel free to reach out if you need more information.\n\n"
             f"Best regards,\n[Your Name]"
         )
         ai_cache[cache_key] = fallback_response
@@ -682,26 +699,24 @@ async def summarize_email(email_body):
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Check available models
-            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
             async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
                 if model_response.status != 200:
                     raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
                 required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+                matching_model = next((m for m in available_models if m.startswith(required_model)), None)
+                if not matching_model:
+                    raise Exception(f"No model matching '{required_model}' found in {available_models}")
 
             payload = {
-                "model": required_model,
+                "model": matching_model,
                 "prompt": f"Summarize this email in 2-3 sentences: {email_body}",
                 "stream": False
             }
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                response_text = await response.text()
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {response_text}")
+                    raise Exception(f"AI API returned {response.status}: {await response.text()}")
                 result = await response.json()
                 summary = result.get("response", "Could not summarize email")
                 ai_cache[cache_key] = summary
@@ -717,26 +732,24 @@ async def categorize_email(email_body):
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Check available models
-            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
             async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
                 if model_response.status != 200:
                     raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
                 required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
+                matching_model = next((m for m in available_models if m.startswith(required_model)), None)
+                if not matching_model:
+                    raise Exception(f"No model matching '{required_model}' found in {available_models}")
 
             payload = {
-                "model": required_model,
+                "model": matching_model,
                 "prompt": f"Categorize this email into one of these categories: [Work, Personal, Newsletter, Spam, Other]. Just respond with the category name: {email_body}",
                 "stream": False
             }
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                response_text = await response.text()
+            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {response_text}")
+                    raise Exception(f"AI API returned {response.status}: {await response.text()}")
                 result = await response.json()
                 category = result.get("response", "Other").strip()
                 ai_cache[cache_key] = category
@@ -786,7 +799,7 @@ def store_tokens():
     data = request.get_json()
     if not data or not all(k in data for k in ['email', 'accessToken', 'refreshToken']):
         logger.error("Missing required fields in store-tokens request")
-        return jsonify({"error": "Missing required fields: email, accessToken, refreshToken"}), 400
+        return jsonify({"error": "Missing required fields"}), 400
     
     try:
         email = data['email']
@@ -803,7 +816,7 @@ def store_tokens():
             {"$set": user_data},
             upsert=True
         )
-        logger.info(f"Tokens stored/updated for {email}: {result.modified_count} modified, {result.upserted_id}")
+        logger.info(f"Tokens stored/updated for {email}")
         return jsonify({"status": "success", "message": "Tokens stored successfully"})
     except Exception as e:
         logger.error(f"Failed to store tokens: {str(e)}", exc_info=True)
