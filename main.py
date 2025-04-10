@@ -635,34 +635,20 @@ async def generate_email(prompt):
         return ai_cache[cache_key]
     
     async with aiohttp.ClientSession() as session:
-        # Default to mistral:latest if model check fails
-        matching_model = "mistral:latest"
-        
-        # Attempt to fetch models with retry logic
-        for attempt in range(3):
-            try:
-                logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags (Attempt {attempt + 1}/3)")
-                async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
-                    response_text = await model_response.text()
-                    logger.debug(f"Model fetch response: {model_response.status} - {response_text}")
-                    if model_response.status != 200:
-                        raise Exception(f"Failed to fetch models: {model_response.status} {response_text}")
-                    models_data = await model_response.json()
-                    available_models = [model["name"] for model in models_data.get("models", [])]
-                    logger.debug(f"Available models: {available_models}")
-                    if available_models:
-                        matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
-                        break
-                    else:
-                        logger.warning("No models returned, falling back to 'mistral:latest'")
-                        break
-            except Exception as e:
-                logger.error(f"Model fetch attempt {attempt + 1} failed: {str(e)}")
-                if attempt == 2:
-                    logger.info("All attempts failed, using default 'mistral:latest'")
-                await asyncio.sleep(1)  # Delay before retry
-        
-        # Send request to Ollama
+        # Fetch available models
+        logger.debug(f"Fetching models from {OLLAMA_API_URL}/api/tags")
+        async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
+            response_text = await model_response.text()
+            logger.debug(f"Model fetch response: {model_response.status} - {response_text}")
+            if model_response.status != 200:
+                raise Exception(f"Failed to fetch models: {model_response.status} {response_text}")
+            models_data = await model_response.json()
+            available_models = [model["name"] for model in models_data.get("models", [])]
+            logger.debug(f"Available models: {available_models}")
+            matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
+            logger.debug(f"Selected model: {matching_model}")
+
+        # Generate email with the selected model
         payload = {
             "model": matching_model,
             "prompt": (
