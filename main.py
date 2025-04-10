@@ -635,22 +635,36 @@ async def generate_email(prompt):
         return ai_cache[cache_key]
     
     async with aiohttp.ClientSession() as session:
-        # Check available models
-        logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
-        async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
-            if model_response.status != 200:
-                raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
-            models_data = await model_response.json()
-            available_models = [model["name"] for model in models_data.get("models", [])]
-            required_model = "mistral"  # Base name to match
-            matching_model = next((m for m in available_models if m.startswith(required_model)), None)
-            if not matching_model:
-                raise Exception(f"No model matching '{required_model}' found in {available_models}")
-            logger.debug(f"Using model: {matching_model}")
-
-        # Send request to Ollama with the matched model
+        # Default to mistral:latest if model check fails
+        matching_model = "mistral:latest"
+        
+        # Attempt to fetch models with retry logic
+        for attempt in range(3):
+            try:
+                logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags (Attempt {attempt + 1}/3)")
+                async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
+                    response_text = await model_response.text()
+                    logger.debug(f"Model fetch response: {model_response.status} - {response_text}")
+                    if model_response.status != 200:
+                        raise Exception(f"Failed to fetch models: {model_response.status} {response_text}")
+                    models_data = await model_response.json()
+                    available_models = [model["name"] for model in models_data.get("models", [])]
+                    logger.debug(f"Available models: {available_models}")
+                    if available_models:
+                        matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
+                        break
+                    else:
+                        logger.warning("No models returned, falling back to 'mistral:latest'")
+                        break
+            except Exception as e:
+                logger.error(f"Model fetch attempt {attempt + 1} failed: {str(e)}")
+                if attempt == 2:
+                    logger.info("All attempts failed, using default 'mistral:latest'")
+                await asyncio.sleep(1)  # Delay before retry
+        
+        # Send request to Ollama
         payload = {
-            "model": matching_model,  # Use "mistral:latest" if available
+            "model": matching_model,
             "prompt": (
                 f"Generate a professional email based on this request: '{prompt}'. "
                 f"Include a clear, concise subject line starting with 'Subject:', "
