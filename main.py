@@ -493,7 +493,7 @@ CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-on-render.onrender.com")
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama-on-render.onrender.com/api/tags")
 MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 MONGO_URI = MONGO_URI_RAW.replace('mongosh', '').replace('"', '').strip()
 DB_NAME = "ai_email_agent"
@@ -629,15 +629,62 @@ def save_email_to_db(email_data):
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
 
+# async def generate_email(prompt):
+#     cache_key = f"generate_{hash(prompt)}"
+#     if cache_key in ai_cache:
+#         return ai_cache[cache_key]
+    
+#     async with aiohttp.ClientSession() as session:
+#         # Fetch available models
+#         logger.debug(f"Fetching models from {OLLAMA_API_URL}/api/tags")
+#         async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
+#             response_text = await model_response.text()
+#             logger.debug(f"Model fetch response: {model_response.status} - {response_text}")
+#             if model_response.status != 200:
+#                 raise Exception(f"Failed to fetch models: {model_response.status} {response_text}")
+#             models_data = await model_response.json()
+#             available_models = [model["name"] for model in models_data.get("models", [])]
+#             logger.debug(f"Available models: {available_models}")
+#             matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
+#             logger.debug(f"Selected model: {matching_model}")
+
+#         # Generate email with the selected model
+#         payload = {
+#             "model": matching_model,
+#             "prompt": (
+#                 f"Generate a professional email based on this request: '{prompt}'. "
+#                 f"Include a clear, concise subject line starting with 'Subject:', "
+#                 f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
+#                 f"and a professional closing (e.g., 'Best regards, [Your Name]'). "
+#                 f"Format it as plain text with line breaks for readability."
+#             ),
+#             "stream": False
+#         }
+#         logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL} with payload: {payload}")
+#         async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
+#             response_text = await response.text()
+#             logger.debug(f"API response: {response.status} - {response_text}")
+#             if response.status != 200:
+#                 raise Exception(f"AI API returned {response.status}: {response_text}")
+#             result = await response.json()
+#             generated_email = result.get("response")
+#             if not generated_email or "Could not generate" in generated_email:
+#                 raise Exception("Model returned empty or invalid response")
+#             ai_cache[cache_key] = generated_email
+#             logger.info("Email generated successfully by model")
+#             return generated_email
+OLLAMA_BASE_URL = "https://ollama-on-render.onrender.com"  # <- No trailing /api here
+
 async def generate_email(prompt):
     cache_key = f"generate_{hash(prompt)}"
     if cache_key in ai_cache:
         return ai_cache[cache_key]
-    
+
     async with aiohttp.ClientSession() as session:
         # Fetch available models
-        logger.debug(f"Fetching models from {OLLAMA_API_URL}/api/tags")
-        async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
+        tags_url = f"{OLLAMA_BASE_URL}/api/tags"
+        logger.debug(f"Fetching models from {tags_url}")
+        async with session.get(tags_url, timeout=aiohttp.ClientTimeout(total=10)) as model_response:
             response_text = await model_response.text()
             logger.debug(f"Model fetch response: {model_response.status} - {response_text}")
             if model_response.status != 200:
@@ -660,8 +707,9 @@ async def generate_email(prompt):
             ),
             "stream": False
         }
-        logger.debug(f"Sending request to Ollama at {OLLAMA_API_URL} with payload: {payload}")
-        async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
+        generate_url = f"{OLLAMA_BASE_URL}/api/generate"
+        logger.debug(f"Sending request to Ollama at {generate_url} with payload: {payload}")
+        async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
             response_text = await response.text()
             logger.debug(f"API response: {response.status} - {response_text}")
             if response.status != 200:
