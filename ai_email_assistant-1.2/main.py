@@ -451,11 +451,9 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
-
 import asyncio
 import aiohttp
 import logging
-import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google.oauth2.credentials import Credentials
@@ -468,6 +466,7 @@ from cachetools import TTLCache
 from functools import wraps
 from pymongo import MongoClient
 from datetime import datetime, timezone
+from transformers import pipeline
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -483,7 +482,7 @@ CORS(app, resources={r"/api/*": {"origins": ["moz-extension://*", "https://email
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "https://ollama.onrender.com")
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")  # Hugging Face API token (optional)
 MONGO_URI_RAW = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 MONGO_URI = MONGO_URI_RAW.replace('mongosh', '').replace('"', '').strip()
 DB_NAME = "ai_email_agent"
@@ -494,14 +493,14 @@ AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 try:
     logger.info(f"Attempting to connect to MongoDB with URI: {MONGO_URI}")
     if not MONGO_URI.startswith("mongodb://") and not MONGO_URI.startswith("mongodb+srv://"):
-        raise ValueError(f"Invalid MONGO_URI after cleanup: '{MONGO_URI}' must start with 'mongodb://' or 'mongodb+srv://'")
+        raise ValueError(f"Invalid MONGO_URI: {MONGO_URI}")
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     users_collection = db.users
     emails_collection = db.emails
     templates_collection = db.templates
-    client.server_info()  # Test connection
-    logger.info("Connected to MongoDB successfully at {}".format(MONGO_URI))
+    client.server_info()
+    logger.info("Connected to MongoDB successfully")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
     raise
@@ -509,6 +508,15 @@ except Exception as e:
 # Caches
 email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
 ai_cache = TTLCache(maxsize=256, ttl=AI_CACHE_TTL)
+
+# Load Hugging Face model (using BART for text generation and summarization)
+try:
+    logger.info("Loading Hugging Face model for email generation and summarization...")
+    generator = pipeline("summarization", model="facebook/bart-large-cnn")
+    logger.info("Hugging Face model loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load Hugging Face model: {str(e)}", exc_info=True)
+    raise
 
 # Helper Functions
 def get_credentials(access_token, refresh_token):
@@ -518,9 +526,7 @@ def get_credentials(access_token, refresh_token):
                 'access_token': access_token,
                 'refresh_token': refresh_token,
                 'token_uri': TOKEN_URI,
-                'client_id': CLIENT
-
-_ID,
+                'client_id': CLIENT_ID,
                 'client_secret': CLIENT_SECRET
             }.items() if not v]
             logger.error(f"Missing credential fields: {missing}")
@@ -537,7 +543,6 @@ _ID,
         if creds.expired and creds.refresh_token:
             logger.debug("Access token expired, refreshing...")
             creds.refresh(Request())
-            logger.info("Access token refreshed successfully")
             access_token = creds.token
             user = users_collection.find_one({"email": {"$exists": True}, "refreshToken": refresh_token})
             if user:
@@ -622,98 +627,35 @@ def save_email_to_db(email_data):
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
 
-async def generate_email(prompt, sender_name=None, recipient_name=None, tone="formal", cc=None):
-    """
-    Generate an advanced, context-aware email with customizable tone, recipients, and sentence count.
-    
-    Args:
-        prompt (str): The user's request (e.g., "generate an email with 10 sentences for two days leave on May 15-16").
-        sender_name (str, optional): Sender's name (defaults to placeholder).
-        recipient_name (str, optional): Recipient's name (defaults to placeholder).
-        tone (str): Tone ("formal", "semi-formal", "urgent"; defaults to "formal").
-        cc (str, optional): CC recipients (e.g., "john@example.com, jane@example.com").
-    """
-    cache_key = f"generate_{hash(prompt)}_{tone}_{sender_name}_{recipient_name}_{cc}"
+async def generate_email(prompt):
+    cache_key = f"generate_{hash(prompt)}"
     if cache_key in ai_cache:
         return ai_cache[cache_key]
-
-    # Defaults and tone mapping
-    sender_name = sender_name or "[Your Full Name]"
-    recipient_name = recipient_name or "[Recipient Name]"
-    tone_map = {
-        "formal": "professional and polite",
-        "semi-formal": "friendly yet professional",
-        "urgent": "direct and urgent"
-    }
-    tone_desc = tone_map.get(tone, tone_map["formal"])
-
-    # Parse sentence count from prompt
-    sentence_count = 3  # Default body sentences
-    match = re.search(r"(?:with\s*)?(\d+)\s*sentence", prompt, re.IGNORECASE)
-    if match:
-        sentence_count = int(match.group(1))
-        prompt = re.sub(r"(?:with\s*)?\d+\s*sentence(s)?\s*", "", prompt, flags=re.IGNORECASE).strip()
     
-    # Adjust word count based on sentence count
-    min_words = max(100, sentence_count * 15)
-
     try:
-        async with aiohttp.ClientSession() as session:
-            # Model check
-            logger.debug(f"Checking models at {OLLAMA_API_URL}/api/tags")
-            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
-                if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found: {available_models}")
-
-            # Streamlined prompt with dynamic sentence count
-            payload = {
-                "model": required_model,
-                "prompt": (
-                    f"Generate a professional email for: '{prompt}'. "
-                    f"Include: 'Subject:', 'Dear {recipient_name}', a purpose (1-2 sentences), "
-                    f"a body of exactly {sentence_count} sentences with details from '{prompt}' or logical assumptions, "
-                    f"a closing (1-2 sentences), and 'Best regards,\n{sender_name}'. "
-                    f"Add 'CC: {cc}' if provided. Use a {tone_desc} tone, min {min_words} words, proper grammar."
-                ),
-                "stream": False
-            }
-            logger.debug(f"Sending to Ollama at {OLLAMA_API_URL}")
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
-                response_text = await response.text()
-                if response.status != 200:
-                    raise Exception(f"API error {response.status}: {response_text}")
-                result = await response.json()
-                email_content = result.get("response", "Could not generate email")
-
-                # Validate structure
-                if "Subject:" not in email_content or "Dear" not in email_content:
-                    raise ValueError("Email lacks required structure")
-                
-                ai_cache[cache_key] = email_content
-                logger.info(f"Email generated with {sentence_count} body sentences")
-                return email_content
-
+        # Generate email using Hugging Face model
+        input_prompt = (
+            f"Generate a professional email based on this request: '{prompt}'. "
+            f"Include a clear, concise subject line starting with 'Subject:', "
+            f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
+            f"and a professional closing (e.g., 'Best regards, [Your Name]'). "
+            f"Format it as plain text with line breaks for readability."
+        )
+        logger.debug(f"Generating email with prompt: {input_prompt}")
+        
+        # Use the Hugging Face pipeline to generate the email
+        generated = generator(input_prompt, max_length=300, min_length=100, do_sample=True, temperature=0.7)
+        generated_email = generated[0]['summary_text']
+        
+        if not generated_email:
+            raise Exception("Model returned empty response")
+        
+        ai_cache[cache_key] = generated_email
+        logger.info("Email generated successfully by Hugging Face model")
+        return generated_email
     except Exception as e:
-        error_msg = f"Failed to generate email: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        cc_line = f"CC: {cc}\n" if cc else ""
-        body_sentences = ".".join([f" This relates to {prompt.lower()}."] * sentence_count).strip()
-        fallback_response = (
-            f"Subject: {prompt.capitalize()}\n\n"
-            f"Dear {recipient_name},\n\n"
-            f"I hope you’re well. This email addresses {prompt.lower()}.\n\n"
-            f"{body_sentences} I’m ready to adjust based on your feedback.\n\n"
-            f"Thank you for your time. I await your response.\n\n"
-            f"Best regards,\n{sender_name}\n"
-            f"{cc_line}"
-        ).strip()
-        ai_cache[cache_key] = fallback_response
-        return fallback_response
+        logger.error(f"Failed to generate email: {str(e)}", exc_info=True)
+        raise Exception(f"Email generation failed: {str(e)}")
 
 async def summarize_email(email_body):
     cache_key = f"summarize_{hash(email_body)}"
@@ -721,33 +663,18 @@ async def summarize_email(email_body):
         return ai_cache[cache_key]
     
     try:
-        async with aiohttp.ClientSession() as session:
-            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
-            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
-                if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
-
-            payload = {
-                "model": required_model,
-                "prompt": f"Summarize this email in 2-3 sentences: {email_body}",
-                "stream": False
-            }
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                response_text = await response.text()
-                if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {response_text}")
-                result = await response.json()
-                summary = result.get("response", "Could not summarize email")
-                ai_cache[cache_key] = summary
-                return summary
+        # Summarize email using Hugging Face model
+        summary = generator(email_body, max_length=100, min_length=30, do_sample=False)
+        summary_text = summary[0]['summary_text']
+        
+        if not summary_text:
+            raise Exception("Model returned empty summary")
+        
+        ai_cache[cache_key] = summary_text
+        return summary_text
     except Exception as e:
         logger.error(f"Failed to summarize email: {str(e)}")
-        raise
+        raise Exception(f"Summarization failed: {str(e)}")
 
 async def categorize_email(email_body):
     cache_key = f"categorize_{hash(email_body)}"
@@ -755,33 +682,24 @@ async def categorize_email(email_body):
         return ai_cache[cache_key]
     
     try:
-        async with aiohttp.ClientSession() as session:
-            logger.debug(f"Checking available models at {OLLAMA_API_URL}/api/tags")
-            async with session.get(f"{OLLAMA_API_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as model_response:
-                if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                required_model = "mistral"
-                if required_model not in available_models:
-                    raise Exception(f"Required model '{required_model}' not found in available models: {available_models}")
-
-            payload = {
-                "model": required_model,
-                "prompt": f"Categorize this email into one of these categories: [Work, Personal, Newsletter, Spam, Other]. Just respond with the category name: {email_body}",
-                "stream": False
-            }
-            async with session.post(OLLAMA_API_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                response_text = await response.text()
-                if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {response_text}")
-                result = await response.json()
-                category = result.get("response", "Other").strip()
-                ai_cache[cache_key] = category
-                return category
+        # Categorize email using a simple heuristic + model inference
+        input_prompt = (
+            f"Categorize this email into one of these categories: [Work, Personal, Newsletter, Spam, Other]. "
+            f"Just respond with the category name: {email_body}"
+        )
+        result = generator(input_prompt, max_length=20, min_length=5, do_sample=False)
+        category = result[0]['summary_text'].strip()
+        
+        # Ensure category is valid
+        valid_categories = ["Work", "Personal", "Newsletter", "Spam", "Other"]
+        if category not in valid_categories:
+            category = "Other"
+        
+        ai_cache[cache_key] = category
+        return category
     except Exception as e:
         logger.error(f"Failed to categorize email: {str(e)}")
-        raise
+        raise Exception(f"Categorization failed: {str(e)}")
 
 async def send_email(access_token, refresh_token, recipient, subject, message):
     try:
@@ -824,7 +742,7 @@ def store_tokens():
     data = request.get_json()
     if not data or not all(k in data for k in ['email', 'accessToken', 'refreshToken']):
         logger.error("Missing required fields in store-tokens request")
-        return jsonify({"error": "Missing required fields: email, accessToken, refreshToken"}), 400
+        return jsonify({"error": "Missing required fields"}), 400
     
     try:
         email = data['email']
@@ -841,7 +759,7 @@ def store_tokens():
             {"$set": user_data},
             upsert=True
         )
-        logger.info(f"Tokens stored/updated for {email}: {result.modified_count} modified, {result.upserted_id}")
+        logger.info(f"Tokens stored/updated for {email}")
         return jsonify({"status": "success", "message": "Tokens stored successfully"})
     except Exception as e:
         logger.error(f"Failed to store tokens: {str(e)}", exc_info=True)
@@ -904,14 +822,8 @@ async def generate_email_endpoint():
     if not data or 'prompt' not in data:
         return jsonify({"error": "Prompt is required"}), 400
     
-    prompt = data.get('prompt')
-    sender_name = data.get('sender_name')
-    recipient_name = data.get('recipient_name')
-    tone = data.get('tone', 'formal')
-    cc = data.get('cc')
-    
     try:
-        email_draft = await generate_email(prompt, sender_name, recipient_name, tone, cc)
+        email_draft = await generate_email(data['prompt'])
         return jsonify({
             "status": "success",
             "emailDraft": email_draft
