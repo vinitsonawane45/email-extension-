@@ -1498,7 +1498,7 @@ async def send_email_endpoint():
     except Exception as e:
         logger.error(f"Send email failed: {str(e)}", exc_info=True)
         if "Authentication failed" in str(e):
-            return jsonify({"error": str w(e)}), 401
+            return jsonify({"error": str(e)}), 401
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 @app.errorhandler(404)
