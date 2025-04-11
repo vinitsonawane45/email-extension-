@@ -857,6 +857,7 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
+
 import asyncio
 import aiohttp
 import logging
@@ -873,9 +874,15 @@ from functools import wraps
 from pymongo import MongoClient
 from datetime import datetime, timezone
 import time
+import random
+import uuid
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure logging for production
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -883,17 +890,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Configure CORS
+# Configure CORS for extension compatibility
 CORS(app, resources={
     r"/api/*": {
         "origins": [
             "moz-extension://*",
             "chrome-extension://*",
             "https://email-extension.onrender.com",
-            "http://localhost:*"
+            "http://localhost:*",
+            "https://*.yourdomain.com"  # Replace with your production domain
         ],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Authorization", "Refresh-Token", "Content-Type"]
+        "allow_headers": ["Authorization", "Refresh-Token", "Content-Type", "X-Request-ID"]
     }
 })
 
@@ -910,7 +918,7 @@ DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 
-# Database Configuration (optional fallback)
+# Database Configuration
 mongo_connected = False
 try:
     if not MONGO_URI:
@@ -922,7 +930,7 @@ try:
         users_collection = db.users
         emails_collection = db.emails
         templates_collection = db.templates
-        client.server_info()  # Test connection
+        client.server_info()
         mongo_connected = True
         logger.info("Connected to MongoDB successfully")
 except Exception as e:
@@ -933,7 +941,15 @@ except Exception as e:
 email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
 ai_cache = TTLCache(maxsize=256, ttl=AI_CACHE_TTL)
 
-# Middleware to ensure CORS headers on all responses
+# Middleware for request ID and CORS
+@app.before_request
+def add_request_id():
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    logging.getLogger().handlers[0].setFormatter(
+        logging.Formatter(f'%(asctime)s - %(name)s - %(levelname)s - [{request_id}] - %(message)s')
+    )
+    request.request_id = request_id
+
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get('Origin')
@@ -941,13 +957,15 @@ def add_cors_headers(response):
         "moz-extension://*",
         "chrome-extension://*",
         "https://email-extension.onrender.com",
-        "http://localhost"
+        "http://localhost",
+        "https://*.yourdomain.com"
     ]
     if any(origin and origin.startswith(o.replace('*', '')) for o in allowed_origins):
         response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
+    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type, X-Request-ID'
     response.headers['Access-Control-Max-Age'] = '86400'
+    response.headers['X-Request-ID'] = request.request_id
     logger.debug(f"Added CORS headers for origin: {origin}")
     return response
 
@@ -958,22 +976,23 @@ def handle_options(path):
     origin = request.headers.get('Origin', '*')
     response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
+    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type, X-Request-ID'
     response.headers['Access-Control-Max-Age'] = '86400'
-    logger.debug(f"Handled OPTIONS request for {path} with origin {origin}")
+    response.headers['X-Request-ID'] = request.request_id
+    logger.debug(f"Handled OPTIONS request for {path}")
     return response, 200
 
-# Root health check for Render
+# Root health check
 @app.route('/', methods=['GET', 'HEAD'])
 def root_health_check():
     logger.info("Root health check requested")
-    return jsonify({"status": "ok", "message": "Server is alive", "mongo_connected": mongo_connected}), 200
+    return jsonify({"status": "ok", "message": "Email AI Extension is operational", "mongo_connected": mongo_connected}), 200
 
-# API health check endpoint
+# API health check
 @app.route('/api/health', methods=['GET'])
 def health_check():
     logger.info("API health check requested")
-    return jsonify({"status": "ok", "message": "Server is running", "mongo_connected": mongo_connected}), 200
+    return jsonify({"status": "ok", "message": "API is running", "mongo_connected": mongo_connected}), 200
 
 # Helper Functions
 def get_credentials(access_token, refresh_token):
@@ -1042,8 +1061,26 @@ def save_email_to_db(email_data):
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
 
-async def generate_email(prompt):
-    cache_key = f"generate_{hash(prompt)}"
+# Advanced Keyword Extraction
+def extract_keywords(prompt):
+    common_words = {'a', 'an', 'the', 'to', 'for', 'on', 'in', 'with', 'and', 'is', 'are', 'of'}
+    words = prompt.lower().split()
+    keywords = [word for word in words if word not in common_words and len(word) > 2]
+    return keywords[:2]  # Limit to 2 for brevity
+
+# Detect intent for tone adjustment
+def detect_intent(prompt):
+    request_words = {'request', 'ask', 'need', 'require'}
+    schedule_words = {'schedule', 'meet', 'meeting', 'call'}
+    prompt_lower = prompt.lower()
+    if any(word in prompt_lower for word in request_words):
+        return "request"
+    elif any(word in prompt_lower for word in schedule_words):
+        return "schedule"
+    return "general"
+
+async def generate_email(prompt, tone="formal"):
+    cache_key = f"generate_{hash(prompt)}_{tone}"
     if cache_key in ai_cache:
         logger.debug("Returning cached email generation")
         return ai_cache[cache_key]
@@ -1052,48 +1089,49 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Concise body relevant to '{prompt}']\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
+                "prompt": f"Generate a professional email for an IT industry executive based on this request: '{prompt}'. Use a {tone} tone. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Concise, professional body relevant to '{prompt}']\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
             }
             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
             logger.debug(f"Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status != 200:
                     logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
-                    return await generate_email_with_hf(prompt, session)
+                    return await generate_email_with_hf(prompt, tone, session)
                 result = await response.json()
-                logger.debug(f"Ollama response: {result}")
                 generated_email = result.get("response", "").strip()
                 if not generated_email:
                     logger.warning("Ollama returned empty response")
-                    return await generate_email_with_hf(prompt, session)
-                # Validate structure only
+                    return await generate_email_with_hf(prompt, tone, session)
                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
                     logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
-                    return await generate_email_with_hf(prompt, session)
+                    return await generate_email_with_hf(prompt, tone, session)
                 ai_cache[cache_key] = generated_email
                 logger.info("Email generated successfully with Ollama")
                 return generated_email
         except Exception as e:
             logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
+            return await generate_email_with_hf(prompt, tone, session)
 
-async def generate_email_with_hf(prompt, session):
+async def generate_email_with_hf(prompt, tone="formal", session=None):
     if not HF_API_TOKEN:
         logger.error("Hugging Face API token not provided")
         raise Exception("Hugging Face API token not provided")
 
-    cache_key = f"generate_hf_{hash(prompt)}"
+    cache_key = f"generate_hf_{hash(prompt)}_{tone}"
     if cache_key in ai_cache:
         logger.debug("Returning cached Hugging Face email generation")
         return ai_cache[cache_key]
 
+    if session is None:
+        session = aiohttp.ClientSession()
+
     try:
         start_time = time.time()
         payload = {
-            "inputs": f"<|instruct|>Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
+            "inputs": f"<|instruct|>Generate a professional email for an IT industry executive based on this request: '{prompt}'. Use a {tone} tone. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise, professional body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1103,42 +1141,101 @@ async def generate_email_with_hf(prompt, session):
         }
         headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
-        async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            if response.status != 200:
-                logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                raise Exception(f"Hugging Face API failed with status {response.status}")
-            result = await response.json()
-            logger.debug(f"Hugging Face response: {result}")
-            generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
-            if not generated_email:
-                logger.error("Hugging Face returned empty response")
-                raise Exception("Hugging Face returned empty response")
-            
-            # Strip instruction tags
-            if "<|instruct|>" in generated_email:
-                generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
-            
-            # Validate structure only, trust content relevance
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email or len(generated_email.split('\n')) < 4:
-                logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
-                # Enforce full email draft
-                formatted_email = [
-                    f"Subject: {prompt.capitalize()}",
-                    "Dear [Recipient],",
-                    f"I hope this email finds you well. I am writing regarding your request to {prompt.lower()}. Please let me know if you need any additional information.",
-                    "Best regards,",
-                    "[Your Name]"
-                ]
-                generated_email = "\n".join(formatted_email)
-                logger.debug(f"Post-processed email: {generated_email}")
-            
-            ai_cache[cache_key] = generated_email
-            elapsed_time = time.time() - start_time
-            logger.info(f"Email generated successfully with Hugging Face in {elapsed_time:.2f} seconds")
-            return generated_email
+        for attempt in range(2):  # Retry once
+            try:
+                async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status != 200:
+                        logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
+                        if attempt == 1:
+                            raise Exception(f"Hugging Face API failed after retries: {response.status}")
+                        continue
+                    result = await response.json()
+                    generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
+                    if not generated_email:
+                        logger.error("Hugging Face returned empty response")
+                        raise Exception("Hugging Face returned empty response")
+                    break
+            except aiohttp.ClientError as e:
+                logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == 1:
+                    raise
+
+        # Strip instruction tags
+        if "<|instruct|>" in generated_email:
+            generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
+        
+        # Validate structure
+        if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email or len(generated_email.split('\n')) < 4:
+            logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
+            # Advanced, professional fallback
+            keywords = extract_keywords(prompt)
+            intent = detect_intent(prompt)
+            greetings = [
+                "Dear [Recipient],",
+                "Hello [Recipient],",
+                "[Recipient],"
+            ]
+            closing_actions = {
+                "request": "your feedback at your earliest convenience",
+                "schedule": "your availability for a discussion",
+                "general": "your thoughts on next steps"
+            }
+
+            if tone == "direct":
+                greeting = random.choice(greetings[:2])  # More concise
+                if len(keywords) == 0:
+                    body_templates = [
+                        f"Please review {prompt.lower()} and provide {closing_actions[intent]}.",
+                        f"I need your input on {prompt.lower()}. Let me know your response soon."
+                    ]
+                elif len(keywords) == 1:
+                    body_templates = [
+                        f"Please address {keywords[0]} and share {closing_actions[intent]}.",
+                        f"Need your take on {keywords[0]}. Respond when possible."
+                    ]
+                else:
+                    body_templates = [
+                        f"Please review {keywords[0]} and {keywords[1]}. Provide {closing_actions[intent]}.",
+                        f"Need your input on {keywords[0]} and {keywords[1]}. Let me know soon."
+                    ]
+            else:  # Formal tone
+                greeting = random.choice(greetings)
+                if len(keywords) == 0:
+                    body_templates = [
+                        f"I am writing to discuss {prompt.lower()}. Please provide {closing_actions[intent]}.",
+                        f"I hope this message finds you well. Regarding {prompt.lower()}, I’d appreciate {closing_actions[intent]}."
+                    ]
+                elif len(keywords) == 1:
+                    body_templates = [
+                        f"I am reaching out regarding {keywords[0]}. Please share {closing_actions[intent]}.",
+                        f"Regarding {keywords[0]}, I’d value {closing_actions[intent]}."
+                    ]
+                else:
+                    body_templates = [
+                        f"I am writing to address {keywords[0]} and {keywords[1]}. Please provide {closing_actions[intent]}.",
+                        f"Concerning {keywords[0]} and {keywords[1]}, I’d appreciate {closing_actions[intent]}."
+                    ]
+
+            formatted_email = [
+                f"Subject: {prompt.capitalize()}",
+                greeting,
+                random.choice(body_templates),
+                "Best regards,",
+                "[Your Name]"
+            ]
+            generated_email = "\n".join(formatted_email)
+            logger.debug(f"Generated fallback email with keywords {keywords} and intent {intent}: {generated_email}")
+        
+        ai_cache[cache_key] = generated_email
+        elapsed_time = time.time() - start_time
+        logger.info(f"Email generated successfully in {elapsed_time:.2f} seconds")
+        return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate email with Hugging Face: {str(e)}")
+        raise Exception(f"Failed to generate email: {str(e)}")
+    finally:
+        if session and not hasattr(session, '_parent'):
+            await session.close()
 
 # Routes
 @app.route('/api/store-tokens', methods=['POST'])
@@ -1149,8 +1246,10 @@ def store_tokens():
         return jsonify({"error": "Missing required fields"}), 400
     try:
         email = data['email']
-        user_data = {"email": email, "accessToken": data['accessToken'], "refreshToken": data['refreshToken'],
-                     "name": data.get('name', ''), "lastLogin": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        user_data = {
+            "email": email, "accessToken": data['accessToken'], "refreshToken": data['refreshToken'],
+            "name": data.get('name', ''), "lastLogin": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)
+        }
         if mongo_connected:
             users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
         logger.info(f"Tokens stored for {email}")
@@ -1192,7 +1291,7 @@ async def fetch_emails_endpoint():
         logger.error("Missing Refresh-Token header")
         return jsonify({"error": "Missing Refresh-Token header"}), 401
     try:
-        logger.info(f"Processing fetch-emails request with access_token: {access_token[:10]}...")
+        logger.info(f"Processing fetch-emails request")
         emails, new_access_token = await fetch_emails(access_token, refresh_token)
         return jsonify({"status": "success", "emails": emails, "newAccessToken": new_access_token})
     except Exception as e:
@@ -1220,16 +1319,20 @@ async def generate_email_endpoint():
             return jsonify({"error": "Prompt is required"}), 400
         
         prompt = data['prompt']
+        tone = data.get('tone', 'formal')  # Default to formal
         if not isinstance(prompt, str) or not prompt.strip():
             logger.error("Prompt must be a non-empty string")
             return jsonify({"error": "Prompt must be a non-empty string"}), 400
+        if tone not in ['formal', 'direct']:
+            logger.warning(f"Invalid tone '{tone}', defaulting to 'formal'")
+            tone = 'formal'
 
-        logger.info(f"Generating email with prompt: {prompt}")
-        email_draft = await generate_email(prompt)
+        logger.info(f"Generating email with prompt: '{prompt}' and tone: '{tone}'")
+        email_draft = await generate_email(prompt, tone)
         if email_draft is None:
             logger.error("Email generation returned None")
             return jsonify({"error": "Failed to generate email: No response from AI services"}), 500
-        return jsonify({"status": "success", "emailDraft": email_draft})
+        return jsonify({"status": "success", "emailDraft": email_draft, "tone": tone})
     except Exception as e:
         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
@@ -1252,5 +1355,5 @@ def handle_exception(e):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "False").lower() in ('true', '1', 't')
-    logger.info(f"Starting Flask server on port {port}, debug={debug}")
+    logger.info(f"Starting Email AI Extension server on port {port}, debug={debug}")
     app.run(host="0.0.0.0", port=port, debug=debug)
