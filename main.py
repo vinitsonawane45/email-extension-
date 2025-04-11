@@ -713,6 +713,7 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
+
 import asyncio
 import aiohttp
 import logging
@@ -899,14 +900,14 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "mistral:latest",
-                "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a subject line starting with 'Subject:', a formal greeting, a polite body, and a professional closing.",
+                "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
                 "stream": False
             }
             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
             logger.debug(f"Sending request to Ollama at {generate_url}")
             async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status != 200:
-                    logger.warning(f"Ollama failed: {response.status}")
+                    logger.warning(f"Ollama failed with status {response.status}")
                     return await generate_email_with_hf(prompt, session)
                 result = await response.json()
                 generated_email = result.get("response", "")
@@ -918,13 +919,13 @@ async def generate_email(prompt):
                 return generated_email
         except Exception as e:
             logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
-
+            return await generate_email_with_hf 
+   
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
-        logger.error("Hugging Face API token not provided")
-        raise Exception("Hugging Face API token not configured")
-    
+        logger.warning("Hugging Face API token not provided, using fallback")
+        return generate_email_fallback(prompt)
+
     cache_key = f"generate_hf_{hash(prompt)}"
     if cache_key in ai_cache:
         logger.debug("Returning cached Hugging Face email generation")
@@ -939,17 +940,23 @@ async def generate_email_with_hf(prompt, session):
         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
             if response.status != 200:
-                raise Exception(f"Hugging Face API returned {response.status}")
+                logger.warning(f"Hugging Face failed with status {response.status}")
+                return generate_email_fallback(prompt)
             result = await response.json()
             generated_email = result[0].get("generated_text", "").strip() if result else ""
             if not generated_email:
-                raise Exception("Hugging Face returned empty response")
+                logger.warning("Hugging Face returned empty response")
+                return generate_email_fallback(prompt)
             ai_cache[cache_key] = generated_email
             logger.info("Email generated successfully with Hugging Face")
             return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"AI generation failed: {str(e)}")
+        return generate_email_fallback(prompt)
+
+def generate_email_fallback(prompt):
+    logger.info("Using fallback email generation")
+    return f"Subject: Follow-Up\n\nDear [Recipient],\n\nI hope this email finds you well. This is a polite follow-up regarding {prompt}. Please let me know if you need any further information.\n\nBest regards,\n[Your Name]"
 
 # Routes
 @app.route('/api/store-tokens', methods=['POST'])
@@ -1008,35 +1015,35 @@ async def fetch_emails_endpoint():
             return jsonify({"error": str(e)}), 401
         return jsonify({"error": f"Failed to fetch emails: {str(e)}"}), 500
 
-# @app.route('/api/generate-email', methods=['POST'])
-# @async_route
-# async def generate_email_endpoint():
-#     data = request.get_json()
-#     if not data or 'prompt' not in data:
-#         logger.error("Missing prompt in generate-email request")
-#         return jsonify({"error": "Prompt is required"}), 400
-#     try:
-#         logger.info(f"Generating email with prompt: {data['prompt']}")
-#         email_draft = await generate_email(data['prompt'])
-#         return jsonify({"status": "success", "emailDraft": email_draft})
-#     except Exception as e:
-#         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
-#         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
 @app.route('/api/generate-email', methods=['POST'])
 @async_route
 async def generate_email_endpoint():
-    data = await request.get_json()  # FIXED: Added `await`
-    if not data or 'prompt' not in data:
-        logger.error("Missing prompt in generate-email request")
-        return jsonify({"error": "Prompt is required"}), 400
     try:
-        logger.info(f"Generating email with prompt: {data['prompt']}")
-        email_draft = await generate_email(data['prompt'])
+        # Check if there's a body and it's valid JSON
+        if not request.data:
+            logger.error("No request body provided")
+            return jsonify({"error": "Request body is empty"}), 400
+        
+        data = await request.get_json(silent=True)  # Use await for async compatibility
+        if data is None or not isinstance(data, dict):
+            logger.error(f"Invalid JSON in request body: {request.data.decode('utf-8')}")
+            return jsonify({"error": "Invalid JSON format"}), 400
+        
+        if 'prompt' not in data:
+            logger.error("Missing 'prompt' in request body")
+            return jsonify({"error": "Prompt is required"}), 400
+        
+        prompt = data['prompt']
+        if not isinstance(prompt, str) or not prompt.strip():
+            logger.error("Prompt must be a non-empty string")
+            return jsonify({"error": "Prompt must be a non-empty string"}), 400
+
+        logger.info(f"Generating email with prompt: {prompt}")
+        email_draft = await generate_email(prompt)
         return jsonify({"status": "success", "emailDraft": email_draft})
     except Exception as e:
         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
-
 
 @app.errorhandler(404)
 def not_found(error):
