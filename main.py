@@ -876,8 +876,9 @@ from datetime import datetime, timezone
 import time
 import random
 import uuid
+import re
 
-# Configure logging for production
+# Configure production-grade logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s',
@@ -890,15 +891,14 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Configure CORS for extension compatibility
+# Configure CORS for extension
 CORS(app, resources={
     r"/api/*": {
         "origins": [
             "moz-extension://*",
             "chrome-extension://*",
             "https://email-extension.onrender.com",
-            "http://localhost:*",
-            "https://*.yourdomain.com"  # Replace with your production domain
+            "http://localhost:*"
         ],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Authorization", "Refresh-Token", "Content-Type", "X-Request-ID"]
@@ -909,7 +909,6 @@ CORS(app, resources={
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
@@ -957,8 +956,7 @@ def add_cors_headers(response):
         "moz-extension://*",
         "chrome-extension://*",
         "https://email-extension.onrender.com",
-        "http://localhost",
-        "https://*.yourdomain.com"
+        "http://localhost"
     ]
     if any(origin and origin.startswith(o.replace('*', '')) for o in allowed_origins):
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -986,7 +984,7 @@ def handle_options(path):
 @app.route('/', methods=['GET', 'HEAD'])
 def root_health_check():
     logger.info("Root health check requested")
-    return jsonify({"status": "ok", "message": "Email AI Extension is operational", "mongo_connected": mongo_connected}), 200
+    return jsonify({"status": "ok", "message": "Advanced Email AI Extension is operational", "mongo_connected": mongo_connected}), 200
 
 # API health check
 @app.route('/api/health', methods=['GET'])
@@ -1061,68 +1059,57 @@ def save_email_to_db(email_data):
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
 
-# Advanced Keyword Extraction
-def extract_keywords(prompt):
+# Advanced NLP Functions
+def extract_keywords_and_entities(prompt):
     common_words = {'a', 'an', 'the', 'to', 'for', 'on', 'in', 'with', 'and', 'is', 'are', 'of'}
     words = prompt.lower().split()
     keywords = [word for word in words if word not in common_words and len(word) > 2]
-    return keywords[:2]  # Limit to 2 for brevity
+    
+    entities = {}
+    date_pattern = r'(next\sweek|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(st|nd|rd|th)?\s(january|february|march|april|may|june|july|august|september|october|november|december))'
+    duration_pattern = r'(\d+\s(days?|weeks?|months?))'
+    role_pattern = r'(team|ceo|manager|developer|staff|client)'
+    for word in words:
+        if re.search(date_pattern, word):
+            entities['date'] = word
+        elif re.search(duration_pattern, prompt.lower()):
+            entities['duration'] = re.search(duration_pattern, prompt.lower()).group(0)
+        elif re.search(role_pattern, word):
+            entities['role'] = word.capitalize()
+    
+    return keywords[:2], entities
 
-# Detect intent for tone adjustment
 def detect_intent(prompt):
-    request_words = {'request', 'ask', 'need', 'require'}
-    schedule_words = {'schedule', 'meet', 'meeting', 'call'}
+    request_words = {'request', 'ask', 'need', 'require', 'feedback', 'input', 'leave', 'permission'}
+    schedule_words = {'schedule', 'meet', 'meeting', 'call', 'lunch', 'session'}
+    update_words = {'update', 'report', 'status', 'progress'}
     prompt_lower = prompt.lower()
     if any(word in prompt_lower for word in request_words):
         return "request"
     elif any(word in prompt_lower for word in schedule_words):
         return "schedule"
+    elif any(word in prompt_lower for word in update_words):
+        return "update"
     return "general"
 
-async def generate_email(prompt, tone="formal"):
-    cache_key = f"generate_{hash(prompt)}_{tone}"
-    if cache_key in ai_cache:
-        logger.debug("Returning cached email generation")
-        return ai_cache[cache_key]
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            payload = {
-                "model": "gemma:2b",
-                "prompt": f"Generate a professional email for an IT industry executive based on this request: '{prompt}'. Use a {tone} tone. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Concise, professional body relevant to '{prompt}']\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
-                "stream": False,
-                "temperature": 0.7,
-                "max_tokens": 300
-            }
-            generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status != 200:
-                    logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
-                    return await generate_email_with_hf(prompt, tone, session)
-                result = await response.json()
-                generated_email = result.get("response", "").strip()
-                if not generated_email:
-                    logger.warning("Ollama returned empty response")
-                    return await generate_email_with_hf(prompt, tone, session)
-                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
-                    logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
-                    return await generate_email_with_hf(prompt, tone, session)
-                ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully with Ollama")
-                return generated_email
-        except Exception as e:
-            logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, tone, session)
+def score_email_quality(email):
+    score = 100
+    if "[Write" in email or len(email.split('\n')) < 4:
+        score -= 50
+    if "hope this" in email.lower() or "please let me know" in email.lower():
+        score -= 20
+    if not all(k in email for k in ["Subject:", "Dear", "Best regards"]):
+        score -= 30
+    return max(score, 0)
 
 async def generate_email_with_hf(prompt, tone="formal", session=None):
     if not HF_API_TOKEN:
         logger.error("Hugging Face API token not provided")
-        raise Exception("Hugging Face API token not provided")
+        return generate_fallback_email(prompt, tone)
 
     cache_key = f"generate_hf_{hash(prompt)}_{tone}"
     if cache_key in ai_cache:
-        logger.debug("Returning cached Hugging Face email generation")
+        logger.debug("Returning cached email generation")
         return ai_cache[cache_key]
 
     if session is None:
@@ -1131,23 +1118,24 @@ async def generate_email_with_hf(prompt, tone="formal", session=None):
     try:
         start_time = time.time()
         payload = {
-            "inputs": f"<|instruct|>Generate a professional email for an IT industry executive based on this request: '{prompt}'. Use a {tone} tone. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise, professional body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
+            "inputs": f"<|instruct|>Generate a professional email for an IT industry executive (e.g., CEO, manager) based on this request: '{prompt}'. Use a {tone} tone, ensuring concise, authoritative, and context-specific content. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise, professional body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
             "parameters": {
                 "max_length": 300,
-                "temperature": 0.7,
-                "top_p": 0.9,
+                "temperature": 0.6,
+                "top_p": 0.85,
                 "do_sample": True
             }
         }
         headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
-        for attempt in range(2):  # Retry once
+        for attempt in range(3):
             try:
-                async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status != 200:
                         logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                        if attempt == 1:
+                        if attempt == 2:
                             raise Exception(f"Hugging Face API failed after retries: {response.status}")
+                        await asyncio.sleep(1 ** attempt)
                         continue
                     result = await response.json()
                     generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
@@ -1157,85 +1145,78 @@ async def generate_email_with_hf(prompt, tone="formal", session=None):
                     break
             except aiohttp.ClientError as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
-                if attempt == 1:
+                if attempt == 2:
                     raise
 
-        # Strip instruction tags
         if "<|instruct|>" in generated_email:
             generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
-        
-        # Validate structure
-        if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email or len(generated_email.split('\n')) < 4:
-            logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
-            # Advanced, professional fallback
-            keywords = extract_keywords(prompt)
-            intent = detect_intent(prompt)
-            greetings = [
-                "Dear [Recipient],",
-                "Hello [Recipient],",
-                "[Recipient],"
-            ]
-            closing_actions = {
-                "request": "your feedback at your earliest convenience",
-                "schedule": "your availability for a discussion",
-                "general": "your thoughts on next steps"
-            }
 
-            if tone == "direct":
-                greeting = random.choice(greetings[:2])  # More concise
-                if len(keywords) == 0:
-                    body_templates = [
-                        f"Please review {prompt.lower()} and provide {closing_actions[intent]}.",
-                        f"I need your input on {prompt.lower()}. Let me know your response soon."
-                    ]
-                elif len(keywords) == 1:
-                    body_templates = [
-                        f"Please address {keywords[0]} and share {closing_actions[intent]}.",
-                        f"Need your take on {keywords[0]}. Respond when possible."
-                    ]
-                else:
-                    body_templates = [
-                        f"Please review {keywords[0]} and {keywords[1]}. Provide {closing_actions[intent]}.",
-                        f"Need your input on {keywords[0]} and {keywords[1]}. Let me know soon."
-                    ]
-            else:  # Formal tone
-                greeting = random.choice(greetings)
-                if len(keywords) == 0:
-                    body_templates = [
-                        f"I am writing to discuss {prompt.lower()}. Please provide {closing_actions[intent]}.",
-                        f"I hope this message finds you well. Regarding {prompt.lower()}, I’d appreciate {closing_actions[intent]}."
-                    ]
-                elif len(keywords) == 1:
-                    body_templates = [
-                        f"I am reaching out regarding {keywords[0]}. Please share {closing_actions[intent]}.",
-                        f"Regarding {keywords[0]}, I’d value {closing_actions[intent]}."
-                    ]
-                else:
-                    body_templates = [
-                        f"I am writing to address {keywords[0]} and {keywords[1]}. Please provide {closing_actions[intent]}.",
-                        f"Concerning {keywords[0]} and {keywords[1]}, I’d appreciate {closing_actions[intent]}."
-                    ]
+        quality_score = score_email_quality(generated_email)
+        if quality_score < 70 or not all(k in generated_email for k in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email:
+            logger.warning(f"Generated email quality too low (score: {quality_score}): {generated_email}")
+            generated_email = generate_fallback_email(prompt, tone)
 
-            formatted_email = [
-                f"Subject: {prompt.capitalize()}",
-                greeting,
-                random.choice(body_templates),
-                "Best regards,",
-                "[Your Name]"
-            ]
-            generated_email = "\n".join(formatted_email)
-            logger.debug(f"Generated fallback email with keywords {keywords} and intent {intent}: {generated_email}")
-        
         ai_cache[cache_key] = generated_email
         elapsed_time = time.time() - start_time
         logger.info(f"Email generated successfully in {elapsed_time:.2f} seconds")
         return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate email: {str(e)}")
+        return generate_fallback_email(prompt, tone)
     finally:
         if session and not hasattr(session, '_parent'):
             await session.close()
+
+def generate_fallback_email(prompt, tone):
+    keywords, entities = extract_keywords_and_entities(prompt)
+    intent = detect_intent(prompt)
+    
+    tones = {
+        "formal": {"greeting": "Dear [Recipient],", "closing": "Best regards,"},
+        "direct": {"greeting": "[Recipient],", "closing": "Regards,"}
+    }
+    tone_config = tones.get(tone, tones["formal"])
+
+    date = entities.get('date', 'soon')
+    duration = entities.get('duration', 'a suitable time')
+    role = entities.get('role', '[Recipient]')
+
+    closing_action = {
+        "request": f"your approval by {date}",
+        "schedule": f"your availability for {date}",
+        "update": f"your feedback by {date}",
+        "general": "your response at your convenience"
+    }.get(intent, "your response at your convenience")
+
+    if tone == "formal":
+        if intent == "request":
+            body = f"I am writing to request {' and '.join(keywords) if keywords else prompt.lower()}. Please provide {closing_action}."
+        elif intent == "schedule":
+            body = f"I’d like to schedule {' and '.join(keywords) if keywords else prompt.lower()}. Please confirm {closing_action}."
+        elif intent == "update":
+            body = f"I am providing an update on {' and '.join(keywords) if keywords else prompt.lower()}. Kindly share {closing_action}."
+        else:
+            body = f"I am reaching out regarding {' and '.join(keywords) if keywords else prompt.lower()}. Please provide {closing_action}."
+    else:  # direct
+        if intent == "request":
+            body = f"Requesting {' and '.join(keywords) if keywords else prompt.lower()}. Provide {closing_action}."
+        elif intent == "schedule":
+            body = f"Schedule {' and '.join(keywords) if keywords else prompt.lower()}. Confirm {closing_action}."
+        elif intent == "update":
+            body = f"Update on {' and '.join(keywords) if keywords else prompt.lower()}. Share {closing_action}."
+        else:
+            body = f"Need {' and '.join(keywords) if keywords else prompt.lower()}. Respond with {closing_action}."
+
+    formatted_email = [
+        f"Subject: {prompt.capitalize()}",
+        tone_config["greeting"],
+        body,
+        tone_config["closing"],
+        "[Your Name]"
+    ]
+    email = "\n".join(formatted_email)
+    logger.debug(f"Generated fallback email with keywords {keywords}, entities {entities}, intent {intent}: {email}")
+    return email
 
 # Routes
 @app.route('/api/store-tokens', methods=['POST'])
@@ -1319,7 +1300,7 @@ async def generate_email_endpoint():
             return jsonify({"error": "Prompt is required"}), 400
         
         prompt = data['prompt']
-        tone = data.get('tone', 'formal')  # Default to formal
+        tone = data.get('tone', 'formal')  # Changed from 'style' to match your curl
         if not isinstance(prompt, str) or not prompt.strip():
             logger.error("Prompt must be a non-empty string")
             return jsonify({"error": "Prompt must be a non-empty string"}), 400
@@ -1328,7 +1309,7 @@ async def generate_email_endpoint():
             tone = 'formal'
 
         logger.info(f"Generating email with prompt: '{prompt}' and tone: '{tone}'")
-        email_draft = await generate_email(prompt, tone)
+        email_draft = await generate_email_with_hf(prompt, tone)
         if email_draft is None:
             logger.error("Email generation returned None")
             return jsonify({"error": "Failed to generate email: No response from AI services"}), 500
@@ -1355,5 +1336,5 @@ def handle_exception(e):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "False").lower() in ('true', '1', 't')
-    logger.info(f"Starting Email AI Extension server on port {port}, debug={debug}")
+    logger.info(f"Starting Advanced Email AI Extension server on port {port}, debug={debug}")
     app.run(host="0.0.0.0", port=port, debug=debug)
