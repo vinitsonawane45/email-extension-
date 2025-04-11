@@ -656,20 +656,26 @@
 #         try:
 #             payload = {
 #                 "model": "gemma:2b",
-#                 "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
-#                 "stream": False
+#                 "prompt": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+#                 "stream": False,
+#                 "temperature": 0.7,
+#                 "max_tokens": 300
 #             }
 #             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-#             logger.debug(f"Sending request to Ollama at {generate_url} with payload: {payload}")
+#             logger.debug(f"Sending request to Ollama at {generate_url}")
 #             async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
 #                 if response.status != 200:
 #                     logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
 #                     return await generate_email_with_hf(prompt, session)
 #                 result = await response.json()
 #                 logger.debug(f"Ollama response: {result}")
-#                 generated_email = result.get("response", "")
+#                 generated_email = result.get("response", "").strip()
 #                 if not generated_email:
 #                     logger.warning("Ollama returned empty response")
+#                     return await generate_email_with_hf(prompt, session)
+#                 # Validate email structure
+#                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
+#                     logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
 #                     return await generate_email_with_hf(prompt, session)
 #                 ai_cache[cache_key] = generated_email
 #                 logger.info("Email generated successfully with Ollama")
@@ -680,8 +686,8 @@
 
 # async def generate_email_with_hf(prompt, session):
 #     if not HF_API_TOKEN:
-#         logger.warning("Hugging Face API token not provided, using fallback")
-#         return generate_email_fallback(prompt)
+#         logger.error("Hugging Face API token not provided")
+#         raise Exception("Hugging Face API token not provided")
 
 #     cache_key = f"generate_hf_{hash(prompt)}"
 #     if cache_key in ai_cache:
@@ -689,32 +695,58 @@
 #         return ai_cache[cache_key]
 
 #     try:
+#         # Simplified prompt to reduce echoing
 #         payload = {
-#             "inputs": f"Generate a professional email based on this request: '{prompt}'. Include a subject line starting with 'Subject:', a formal greeting, a polite body, and a professional closing.",
-#             "parameters": {"max_length": 200, "temperature": 0.7}
+#             "inputs": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+#             "parameters": {
+#                 "max_length": 300,
+#                 "temperature": 0.7,
+#                 "top_p": 0.9,
+#                 "do_sample": True
+#             }
 #         }
 #         headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
 #         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
 #         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
 #             if response.status != 200:
-#                 logger.warning(f"Hugging Face failed with status {response.status}: {await response.text()}")
-#                 return generate_email_fallback(prompt)
+#                 logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
+#                 raise Exception(f"Hugging Face API failed with status {response.status}")
 #             result = await response.json()
 #             logger.debug(f"Hugging Face response: {result}")
-#             generated_email = result[0].get("generated_text", "").strip() if result else ""
+#             generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
 #             if not generated_email:
-#                 logger.warning("Hugging Face returned empty response")
-#                 return generate_email_fallback(prompt)
+#                 logger.error("Hugging Face returned empty response")
+#                 raise Exception("Hugging Face returned empty response")
+            
+#             # Strip the prompt and enforce structure
+#             prompt_prefix = f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]"
+#             if generated_email.startswith(prompt_prefix):
+#                 generated_email = generated_email[len(prompt_prefix):].strip()
+#             # Validate and post-process email structure
+#             if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "Generate a professional email" in generated_email:
+#                 logger.warning(f"Hugging Face returned improperly formatted email: {generated_email}")
+#                 # Enforce structure
+#                 formatted_email = [
+#                     f"Subject: {prompt.capitalize()}",
+#                     "Dear [Recipient],"
+#                 ]
+#                 # Extract body if possible, or use default
+#                 lines = generated_email.split("\n")
+#                 body_lines = [line.strip() for line in lines if line.strip() and not any(keyword in line for keyword in ["Subject:", "Dear", "Best regards", "Generate"])]
+#                 if body_lines:
+#                     formatted_email.extend(body_lines)
+#                 else:
+#                     formatted_email.append(f"I am writing to invite you to a meeting next week to discuss our plans. Please let me know your availability.")
+#                 formatted_email.extend(["Best regards,", "[Your Name]"])
+#                 generated_email = "\n".join(formatted_email)
+#                 logger.debug(f"Post-processed email: {generated_email}")
+            
 #             ai_cache[cache_key] = generated_email
 #             logger.info("Email generated successfully with Hugging Face")
 #             return generated_email
 #     except Exception as e:
 #         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-#         return generate_email_fallback(prompt)
-
-# def generate_email_fallback(prompt):
-#     logger.info("Using fallback email generation")
-#     return f"Subject: Follow-Up\n\nDear [Recipient],\n\nI hope this email finds you well. This is a polite follow-up regarding {prompt}. Please let me know if you need any further information.\n\nBest regards,\n[Your Name]"
+#         raise Exception(f"Failed to generate email with Hugging Face: {str(e)}")
 
 # # Routes
 # @app.route('/api/store-tokens', methods=['POST'])
@@ -785,7 +817,6 @@
 #             logger.error("No request body provided")
 #             return jsonify({"error": "Request body is empty"}), 400
         
-#         # Remove await, as get_json is synchronous
 #         data = request.get_json(silent=True)
 #         logger.debug(f"Raw request data: {request.data.decode('utf-8')}")
 #         if data is None or not isinstance(data, dict):
@@ -831,7 +862,6 @@
 #     debug = os.getenv("FLASK_DEBUG", "False").lower() in ('true', '1', 't')
 #     logger.info(f"Starting Flask server on port {port}, debug={debug}")
 #     app.run(host="0.0.0.0", port=port, debug=debug)
-
 
 
 import asyncio
@@ -1027,7 +1057,7 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+                "prompt": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -1044,9 +1074,9 @@ async def generate_email(prompt):
                 if not generated_email:
                     logger.warning("Ollama returned empty response")
                     return await generate_email_with_hf(prompt, session)
-                # Validate email structure
-                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
-                    logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
+                # Validate email structure and relevance
+                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
+                    logger.warning(f"Ollama returned improperly formatted or irrelevant email: {generated_email}")
                     return await generate_email_with_hf(prompt, session)
                 ai_cache[cache_key] = generated_email
                 logger.info("Email generated successfully with Ollama")
@@ -1066,9 +1096,8 @@ async def generate_email_with_hf(prompt, session):
         return ai_cache[cache_key]
 
     try:
-        # Simplified prompt to reduce echoing
         payload = {
-            "inputs": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+            "inputs": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1089,26 +1118,20 @@ async def generate_email_with_hf(prompt, session):
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
             
-            # Strip the prompt and enforce structure
-            prompt_prefix = f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]"
+            # Strip prompt and validate structure/relevance
+            prompt_prefix = payload["inputs"]
             if generated_email.startswith(prompt_prefix):
                 generated_email = generated_email[len(prompt_prefix):].strip()
-            # Validate and post-process email structure
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "Generate a professional email" in generated_email:
-                logger.warning(f"Hugging Face returned improperly formatted email: {generated_email}")
-                # Enforce structure
+            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
+                logger.warning(f"Hugging Face returned improperly formatted or irrelevant email: {generated_email}")
+                # Enforce proper email draft
                 formatted_email = [
                     f"Subject: {prompt.capitalize()}",
-                    "Dear [Recipient],"
+                    "Dear [Recipient],",
+                    f"I hope this email finds you well. I would like to invite you to a meeting next week to discuss our upcoming plans. Please let me know your availability so we can schedule a suitable time.",
+                    "Best regards,",
+                    "[Your Name]"
                 ]
-                # Extract body if possible, or use default
-                lines = generated_email.split("\n")
-                body_lines = [line.strip() for line in lines if line.strip() and not any(keyword in line for keyword in ["Subject:", "Dear", "Best regards", "Generate"])]
-                if body_lines:
-                    formatted_email.extend(body_lines)
-                else:
-                    formatted_email.append(f"I am writing to invite you to a meeting next week to discuss our plans. Please let me know your availability.")
-                formatted_email.extend(["Best regards,", "[Your Name]"])
                 generated_email = "\n".join(formatted_email)
                 logger.debug(f"Post-processed email: {generated_email}")
             
