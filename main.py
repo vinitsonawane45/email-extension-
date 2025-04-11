@@ -906,7 +906,7 @@ async def generate_email(prompt):
     async with aiohttp.ClientSession() as session:
         try:
             payload = {
-                "model": "gemma:2b",  # Updated to use gemma:2b
+                "model": "gemma:2b",
                 "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
                 "stream": False
             }
@@ -932,7 +932,7 @@ async def generate_email(prompt):
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
         logger.warning("Hugging Face API token not provided, using fallback")
-        return generate_email_fallback(prompt)
+        return generate_email_fallback(prompt)  # No await, as it's sync
 
     cache_key = f"generate_hf_{hash(prompt)}"
     if cache_key in ai_cache:
@@ -949,19 +949,19 @@ async def generate_email_with_hf(prompt, session):
         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
             if response.status != 200:
                 logger.warning(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                return generate_email_fallback(prompt)
+                return generate_email_fallback(prompt)  # No await
             result = await response.json()
             logger.debug(f"Hugging Face response: {result}")
             generated_email = result[0].get("generated_text", "").strip() if result else ""
             if not generated_email:
                 logger.warning("Hugging Face returned empty response")
-                return generate_email_fallback(prompt)
+                return generate_email_fallback(prompt)  # No await
             ai_cache[cache_key] = generated_email
             logger.info("Email generated successfully with Hugging Face")
             return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        return generate_email_fallback(prompt)
+        return generate_email_fallback(prompt)  # No await
 
 def generate_email_fallback(prompt):
     logger.info("Using fallback email generation")
