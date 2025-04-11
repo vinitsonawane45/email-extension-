@@ -760,24 +760,29 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0").strip()
+MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 
-# Database Configuration
+# Database Configuration (optional fallback)
+mongo_connected = False
 try:
-    logger.info("Connecting to MongoDB...")
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    db = client[DB_NAME]
-    users_collection = db.users
-    emails_collection = db.emails
-    templates_collection = db.templates
-    client.server_info()
-    logger.info("Connected to MongoDB successfully")
+    if not MONGO_URI:
+        logger.warning("MONGO_URI not set, running without database")
+    else:
+        logger.info("Connecting to MongoDB...")
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client[DB_NAME]
+        users_collection = db.users
+        emails_collection = db.emails
+        templates_collection = db.templates
+        client.server_info()  # Test connection
+        mongo_connected = True
+        logger.info("Connected to MongoDB successfully")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
-    raise SystemExit(f"Cannot start app: MongoDB connection failed: {str(e)}")
+    logger.warning("Continuing without MongoDB functionality")
 
 # Caches
 email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
@@ -817,13 +822,13 @@ def handle_options(path):
 @app.route('/', methods=['GET', 'HEAD'])
 def root_health_check():
     logger.info("Root health check requested")
-    return jsonify({"status": "ok", "message": "Server is alive"}), 200
+    return jsonify({"status": "ok", "message": "Server is alive", "mongo_connected": mongo_connected}), 200
 
 # API health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health_check():
     logger.info("API health check requested")
-    return jsonify({"status": "ok", "message": "Server is running"}), 200
+    return jsonify({"status": "ok", "message": "Server is running", "mongo_connected": mongo_connected}), 200
 
 # Helper Functions
 def get_credentials(access_token, refresh_token):
@@ -837,10 +842,11 @@ def get_credentials(access_token, refresh_token):
             logger.debug("Access token expired, refreshing...")
             creds.refresh(Request())
             access_token = creds.token
-            user = users_collection.find_one({"refreshToken": refresh_token})
-            if user:
-                users_collection.update_one({"email": user['email']}, {"$set": {"accessToken": access_token, "updated_at": datetime.now(timezone.utc)}})
-                logger.info(f"Updated access token for {user['email']}")
+            if mongo_connected:
+                user = users_collection.find_one({"refreshToken": refresh_token})
+                if user:
+                    users_collection.update_one({"email": user['email']}, {"$set": {"accessToken": access_token, "updated_at": datetime.now(timezone.utc)}})
+                    logger.info(f"Updated access token for {user['email']}")
         service = build('gmail', 'v1', credentials=creds)
         service.users().getProfile(userId='me').execute()
         return creds, access_token
@@ -874,7 +880,8 @@ async def fetch_emails(access_token, refresh_token):
                 'date': headers.get('Date', ''), 'snippet': msg.get('snippet', '')
             }
             emails.append(email_data)
-            save_email_to_db(email_data)
+            if mongo_connected:
+                save_email_to_db(email_data)
         logger.info(f"Fetched {len(emails)} emails")
         return emails, new_access_token
     except Exception as e:
@@ -919,7 +926,11 @@ async def generate_email(prompt):
                 return generated_email
         except Exception as e:
             logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
+            hf_result = await generate_email_with_hf(prompt, session)
+            if not hf_result:
+                logger.error("Hugging Face also failed, falling back to default")
+                return generate_email_fallback(prompt)
+            return hf_result
 
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
@@ -969,7 +980,8 @@ def store_tokens():
         email = data['email']
         user_data = {"email": email, "accessToken": data['accessToken'], "refreshToken": data['refreshToken'],
                      "name": data.get('name', ''), "lastLogin": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
-        users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
+        if mongo_connected:
+            users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
         logger.info(f"Tokens stored for {email}")
         return jsonify({"status": "success", "message": "Tokens stored successfully"})
     except Exception as e:
@@ -983,6 +995,9 @@ def get_tokens():
         logger.error("Missing email parameter in get-tokens request")
         return jsonify({"error": "Missing email parameter"}), 400
     try:
+        if not mongo_connected:
+            logger.warning("MongoDB not connected, cannot retrieve tokens")
+            return jsonify({"error": "Database unavailable"}), 503
         user = users_collection.find_one({"email": email})
         if not user:
             logger.warning(f"No user found with email: {email}")
@@ -1019,12 +1034,11 @@ async def fetch_emails_endpoint():
 @async_route
 async def generate_email_endpoint():
     try:
-        # Check if there's a body and it's valid JSON
         if not request.data:
             logger.error("No request body provided")
             return jsonify({"error": "Request body is empty"}), 400
         
-        data = await request.get_json(silent=True)  # Use await for async compatibility
+        data = await request.get_json(silent=True)
         if data is None or not isinstance(data, dict):
             logger.error(f"Invalid JSON in request body: {request.data.decode('utf-8')}")
             return jsonify({"error": "Invalid JSON format"}), 400
@@ -1040,6 +1054,9 @@ async def generate_email_endpoint():
 
         logger.info(f"Generating email with prompt: {prompt}")
         email_draft = await generate_email(prompt)
+        if not email_draft:
+            logger.error("Email generation returned no result")
+            email_draft = generate_email_fallback(prompt)
         return jsonify({"status": "success", "emailDraft": email_draft})
     except Exception as e:
         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
