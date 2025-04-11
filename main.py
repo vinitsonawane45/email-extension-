@@ -1206,6 +1206,7 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
+
 import asyncio
 import aiohttp
 import logging
@@ -1251,7 +1252,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-base"
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-base"  # Changed to facebook/bart-base
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
