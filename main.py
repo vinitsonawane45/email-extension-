@@ -834,375 +834,42 @@
 
 
 
-import asyncio
-import aiohttp
-import logging
-from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-import base64
-from dotenv import load_dotenv
-import os
-from cachetools import TTLCache
-from functools import wraps
-from pymongo import MongoClient
-from datetime import datetime, timezone
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
-
-app = Flask(__name__)
-
-# Configure CORS
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "moz-extension://*",
-            "chrome-extension://*",
-            "https://email-extension.onrender.com",
-            "http://localhost:*"
-        ],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Authorization", "Refresh-Token", "Content-Type"]
-    }
-})
-
-# Environment Variables
-CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
-HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = "ai_email_agent"
-EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
-
-# Database Configuration (optional fallback)
-mongo_connected = False
-try:
-    if not MONGO_URI:
-        logger.warning("MONGO_URI not set, running without database")
+if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
+    logger.warning(f"Hugging Face returned improperly formatted email: {generated_email}")
+    # Attempt to extract or enforce structure
+    lines = generated_email.split("\n")
+    formatted_email = []
+    subject_found = False
+    greeting_found = False
+    closing_found = False
+    body_lines = []
+    
+    for line in lines:
+        if line.startswith("Subject:") and not subject_found:
+            formatted_email.append(line)
+            subject_found = True
+        elif line.startswith("Dear") and not greeting_found:
+            formatted_email.append(line)
+            greeting_found = True
+        elif any(closing in line for closing in ["Best regards", "Sincerely", "Kind regards"]) and not closing_found:
+            formatted_email.append(line)
+            closing_found = True
+            if not "Your Name" in line:
+                formatted_email.append("[Your Name]")
+        elif subject_found and greeting_found and not closing_found and line.strip():
+            body_lines.append(line)
+    
+    # If structure is incomplete, enforce it
+    if not subject_found:
+        formatted_email.insert(0, f"Subject: {prompt.capitalize()}")
+    if not greeting_found:
+        formatted_email.append("Dear [Recipient],")
+    if body_lines:
+        formatted_email.extend(body_lines)
     else:
-        logger.info("Connecting to MongoDB...")
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        db = client[DB_NAME]
-        users_collection = db.users
-        emails_collection = db.emails
-        templates_collection = db.templates
-        client.server_info()  # Test connection
-        mongo_connected = True
-        logger.info("Connected to MongoDB successfully")
-except Exception as e:
-    logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
-    logger.warning("Continuing without MongoDB functionality")
-
-# Caches
-email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
-ai_cache = TTLCache(maxsize=256, ttl=AI_CACHE_TTL)
-
-# Middleware to ensure CORS headers on all responses
-@app.after_request
-def add_cors_headers(response):
-    origin = request.headers.get('Origin')
-    allowed_origins = [
-        "moz-extension://*",
-        "chrome-extension://*",
-        "https://email-extension.onrender.com",
-        "http://localhost"
-    ]
-    if any(origin and origin.startswith(o.replace('*', '')) for o in allowed_origins):
-        response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
-    response.headers['Access-Control-Max-Age'] = '86400'
-    logger.debug(f"Added CORS headers for origin: {origin}")
-    return response
-
-# Handle preflight OPTIONS requests
-@app.route('/api/<path:path>', methods=['OPTIONS'])
-def handle_options(path):
-    response = make_response()
-    origin = request.headers.get('Origin', '*')
-    response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
-    response.headers['Access-Control-Max-Age'] = '86400'
-    logger.debug(f"Handled OPTIONS request for {path} with origin {origin}")
-    return response, 200
-
-# Root health check for Render
-@app.route('/', methods=['GET', 'HEAD'])
-def root_health_check():
-    logger.info("Root health check requested")
-    return jsonify({"status": "ok", "message": "Server is alive", "mongo_connected": mongo_connected}), 200
-
-# API health check endpoint
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    logger.info("API health check requested")
-    return jsonify({"status": "ok", "message": "Server is running", "mongo_connected": mongo_connected}), 200
-
-# Helper Functions
-def get_credentials(access_token, refresh_token):
-    try:
-        if not all([access_token, refresh_token, TOKEN_URI, CLIENT_ID, CLIENT_SECRET]):
-            missing = [k for k, v in {'access_token': access_token, 'refresh_token': refresh_token, 'token_uri': TOKEN_URI, 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET}.items() if not v]
-            logger.error(f"Missing credential fields: {missing}")
-            raise ValueError(f"Missing required credential fields: {missing}")
-        creds = Credentials(token=access_token, refresh_token=refresh_token, token_uri=TOKEN_URI, client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
-        if creds.expired and creds.refresh_token:
-            logger.debug("Access token expired, refreshing...")
-            creds.refresh(Request())
-            access_token = creds.token
-            if mongo_connected:
-                user = users_collection.find_one({"refreshToken": refresh_token})
-                if user:
-                    users_collection.update_one({"email": user['email']}, {"$set": {"accessToken": access_token, "updated_at": datetime.now(timezone.utc)}})
-                    logger.info(f"Updated access token for {user['email']}")
-        service = build('gmail', 'v1', credentials=creds)
-        service.users().getProfile(userId='me').execute()
-        return creds, access_token
-    except Exception as e:
-        logger.error(f"Credential error: {str(e)}", exc_info=True)
-        raise Exception(f"Authentication failed: {str(e)}")
-
-def async_route(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return asyncio.run(func(*args, **kwargs))
-        except Exception as e:
-            logger.error(f"Error in {func.__name__}: {str(e)}", exc_info=True)
-            return jsonify({"error": f"Internal server error: {str(e)}"}), 500
-    return wrapper
-
-async def fetch_emails(access_token, refresh_token):
-    try:
-        creds, new_access_token = get_credentials(access_token, refresh_token)
-        service = build('gmail', 'v1', credentials=creds)
-        logger.debug("Fetching Gmail messages")
-        results = service.users().messages().list(userId='me', maxResults=10, labelIds=['INBOX']).execute()
-        messages = results.get('messages', [])
-        emails = []
-        for message in messages:
-            msg = service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['From', 'Subject', 'Date']).execute()
-            headers = {h['name']: h['value'] for h in msg['payload']['headers']}
-            email_data = {
-                'id': message['id'], 'from': headers.get('From', ''), 'subject': headers.get('Subject', ''),
-                'date': headers.get('Date', ''), 'snippet': msg.get('snippet', '')
-            }
-            emails.append(email_data)
-            if mongo_connected:
-                save_email_to_db(email_data)
-        logger.info(f"Fetched {len(emails)} emails")
-        return emails, new_access_token
-    except Exception as e:
-        logger.error(f"Failed to fetch emails: {str(e)}", exc_info=True)
-        raise
-
-def save_email_to_db(email_data):
-    try:
-        if not emails_collection.find_one({'id': email_data['id']}):
-            email_data.update({'created_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc)})
-            emails_collection.insert_one(email_data)
-            logger.debug(f"Saved email {email_data['id']} to DB")
-    except Exception as e:
-        logger.error(f"Failed to save email to DB: {str(e)}")
-
-async def generate_email(prompt):
-    cache_key = f"generate_{hash(prompt)}"
-    if cache_key in ai_cache:
-        logger.debug("Returning cached email generation")
-        return ai_cache[cache_key]
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            payload = {
-                "model": "gemma:2b",
-                "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body tailored to the prompt, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
-                "stream": False,
-                "temperature": 0.7,
-                "max_tokens": 300
-            }
-            generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                if response.status != 200:
-                    logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
-                    return await generate_email_with_hf(prompt, session)
-                result = await response.json()
-                logger.debug(f"Ollama response: {result}")
-                generated_email = result.get("response", "").strip()
-                if not generated_email:
-                    logger.warning("Ollama returned empty response")
-                    return await generate_email_with_hf(prompt, session)
-                ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully with Ollama")
-                return generated_email
-        except Exception as e:
-            logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
-
-async def generate_email_with_hf(prompt, session):
-    if not HF_API_TOKEN:
-        logger.error("Hugging Face API token not provided")
-        raise Exception("Hugging Face API token not provided")
-
-    cache_key = f"generate_hf_{hash(prompt)}"
-    if cache_key in ai_cache:
-        logger.debug("Returning cached Hugging Face email generation")
-        return ai_cache[cache_key]
-
-    try:
-        payload = {
-            "inputs": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body tailored to the prompt, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
-            "parameters": {
-                "max_length": 300,
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "do_sample": True
-            }
-        }
-        headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
-        logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
-        async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            if response.status != 200:
-                logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                raise Exception(f"Hugging Face API failed with status {response.status}")
-            result = await response.json()
-            logger.debug(f"Hugging Face response: {result}")
-            generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
-            if not generated_email:
-                logger.error("Hugging Face returned empty response")
-                raise Exception("Hugging Face returned empty response")
-            ai_cache[cache_key] = generated_email
-            logger.info("Email generated successfully with Hugging Face")
-            return generated_email
-    except Exception as e:
-        logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate email with Hugging Face: {str(e)}")
-
-# Routes
-@app.route('/api/store-tokens', methods=['POST'])
-def store_tokens():
-    data = request.get_json()
-    if not data or not all(k in data for k in ['email', 'accessToken', 'refreshToken']):
-        logger.error("Missing required fields in store-tokens request")
-        return jsonify({"error": "Missing required fields"}), 400
-    try:
-        email = data['email']
-        user_data = {"email": email, "accessToken": data['accessToken'], "refreshToken": data['refreshToken'],
-                     "name": data.get('name', ''), "lastLogin": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
-        if mongo_connected:
-            users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
-        logger.info(f"Tokens stored for {email}")
-        return jsonify({"status": "success", "message": "Tokens stored successfully"})
-    except Exception as e:
-        logger.error(f"Failed to store tokens: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to store tokens: {str(e)}"}), 500
-
-@app.route('/api/get-tokens', methods=['GET'])
-def get_tokens():
-    email = request.args.get('email')
-    if not email:
-        logger.error("Missing email parameter in get-tokens request")
-        return jsonify({"error": "Missing email parameter"}), 400
-    try:
-        if not mongo_connected:
-            logger.warning("MongoDB not connected, cannot retrieve tokens")
-            return jsonify({"error": "Database unavailable"}), 503
-        user = users_collection.find_one({"email": email})
-        if not user:
-            logger.warning(f"No user found with email: {email}")
-            return jsonify({"error": "User not found"}), 404
-        logger.info(f"Retrieved tokens for {email}")
-        return jsonify({"status": "success", "accessToken": user.get("accessToken"), "refreshToken": user.get("refreshToken")})
-    except Exception as e:
-        logger.error(f"Failed to retrieve tokens: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to retrieve tokens: {str(e)}"}), 500
-
-@app.route('/api/fetch-emails', methods=['GET'])
-@async_route
-async def fetch_emails_endpoint():
-    auth_header = request.headers.get('Authorization')
-    refresh_token = request.headers.get('Refresh-Token')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        logger.error("Missing or invalid Authorization header")
-        return jsonify({"error": "Missing or invalid Authorization header"}), 401
-    access_token = auth_header.split('Bearer ')[1].strip()
-    if not refresh_token:
-        logger.error("Missing Refresh-Token header")
-        return jsonify({"error": "Missing Refresh-Token header"}), 401
-    try:
-        logger.info(f"Processing fetch-emails request with access_token: {access_token[:10]}...")
-        emails, new_access_token = await fetch_emails(access_token, refresh_token)
-        return jsonify({"status": "success", "emails": emails, "newAccessToken": new_access_token})
-    except Exception as e:
-        logger.error(f"Fetch emails failed: {str(e)}", exc_info=True)
-        if "Authentication failed" in str(e):
-            return jsonify({"error": str(e)}), 401
-        return jsonify({"error": f"Failed to fetch emails: {str(e)}"}), 500
-
-@app.route('/api/generate-email', methods=['POST'])
-@async_route
-async def generate_email_endpoint():
-    try:
-        if not request.data:
-            logger.error("No request body provided")
-            return jsonify({"error": "Request body is empty"}), 400
-        
-        data = request.get_json(silent=True)
-        logger.debug(f"Raw request data: {request.data.decode('utf-8')}")
-        if data is None or not isinstance(data, dict):
-            logger.error(f"Invalid JSON in request body: {request.data.decode('utf-8')}")
-            return jsonify({"error": "Invalid JSON format"}), 400
-        
-        if 'prompt' not in data:
-            logger.error("Missing 'prompt' in request body")
-            return jsonify({"error": "Prompt is required"}), 400
-        
-        prompt = data['prompt']
-        if not isinstance(prompt, str) or not prompt.strip():
-            logger.error("Prompt must be a non-empty string")
-            return jsonify({"error": "Prompt must be a non-empty string"}), 400
-
-        logger.info(f"Generating email with prompt: {prompt}")
-        email_draft = await generate_email(prompt)
-        if email_draft is None:
-            logger.error("Email generation returned None")
-            return jsonify({"error": "Failed to generate email: No response from AI services"}), 500
-        return jsonify({"status": "success", "emailDraft": email_draft})
-    except Exception as e:
-        logger.error(f"Generate email failed: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    logger.error(f"404 error: {request.path}")
-    return jsonify({"error": "Not found"}), 404
-
-@app.errorhandler(405)
-def method_not_allowed(error):
-    logger.error(f"405 error: {request.method} not allowed for {request.path}")
-    return jsonify({"error": f"Method {request.method} not allowed"}), 405
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
-    return jsonify({"error": f"Internal server error: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.getenv("FLASK_DEBUG", "False").lower() in ('true', '1', 't')
-    logger.info(f"Starting Flask server on port {port}, debug={debug}")
-    app.run(host="0.0.0.0", port=port, debug=debug)
-
-
+        formatted_email.append(f"I am writing regarding {prompt.lower()}.")
+    if not closing_found:
+        formatted_email.extend(["Best regards,", "[Your Name]"])
+    
+    generated_email = "\n".join(formatted_email)
+    logger.debug(f"Post-processed email: {generated_email}")
