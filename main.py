@@ -872,6 +872,7 @@ from cachetools import TTLCache
 from functools import wraps
 from pymongo import MongoClient
 from datetime import datetime, timezone
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -1051,7 +1052,7 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
+                "prompt": f"Generate a professional email based on this request: '{prompt}'. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -1090,8 +1091,9 @@ async def generate_email_with_hf(prompt, session):
         return ai_cache[cache_key]
 
     try:
+        start_time = time.time()
         payload = {
-            "inputs": f"<|instruct|>Write a professional email to invite a colleague to a meeting next week. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body about the meeting here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
+            "inputs": f"<|instruct|>Generate a professional email based on this request: '{prompt}'. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1112,16 +1114,16 @@ async def generate_email_with_hf(prompt, session):
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
             
-            # Strip instruction tags and validate
+            # Strip instruction tags and ensure full email draft
             if "<|instruct|>" in generated_email:
                 generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
-                logger.warning(f"Hugging Face returned improperly formatted or irrelevant email: {generated_email}")
-                # Enforce proper email draft
+            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower() or "[Insert" in generated_email:
+                logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
+                # Enforce full email draft
                 formatted_email = [
                     f"Subject: {prompt.capitalize()}",
                     "Dear [Recipient],",
-                    f"I hope this email finds you well. I would like to invite you to a meeting next week to discuss our upcoming plans. Please let me know your availability so we can schedule a suitable time.",
+                    f"I hope this email finds you well. I am writing to {prompt.lower()}. Please let me know if you have any questions or need further details.",
                     "Best regards,",
                     "[Your Name]"
                 ]
@@ -1129,7 +1131,8 @@ async def generate_email_with_hf(prompt, session):
                 logger.debug(f"Post-processed email: {generated_email}")
             
             ai_cache[cache_key] = generated_email
-            logger.info("Email generated successfully with Hugging Face")
+            elapsed_time = time.time() - start_time
+            logger.info(f"Email generated successfully with Hugging Face in {elapsed_time:.2f} seconds")
             return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
