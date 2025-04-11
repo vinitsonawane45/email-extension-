@@ -1052,7 +1052,7 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Generate a professional email based on this request: '{prompt}'. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
+                "prompt": f"Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Concise body relevant to '{prompt}']\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -1069,9 +1069,9 @@ async def generate_email(prompt):
                 if not generated_email:
                     logger.warning("Ollama returned empty response")
                     return await generate_email_with_hf(prompt, session)
-                # Validate email structure and relevance
-                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
-                    logger.warning(f"Ollama returned improperly formatted or irrelevant email: {generated_email}")
+                # Validate structure only
+                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
+                    logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
                     return await generate_email_with_hf(prompt, session)
                 ai_cache[cache_key] = generated_email
                 logger.info("Email generated successfully with Ollama")
@@ -1093,7 +1093,7 @@ async def generate_email_with_hf(prompt, session):
     try:
         start_time = time.time()
         payload = {
-            "inputs": f"<|instruct|>Generate a professional email based on this request: '{prompt}'. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
+            "inputs": f"<|instruct|>Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1114,16 +1114,18 @@ async def generate_email_with_hf(prompt, session):
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
             
-            # Strip instruction tags and ensure full email draft
+            # Strip instruction tags
             if "<|instruct|>" in generated_email:
                 generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower() or "[Insert" in generated_email:
+            
+            # Validate structure only, trust content relevance
+            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email or len(generated_email.split('\n')) < 4:
                 logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
                 # Enforce full email draft
                 formatted_email = [
                     f"Subject: {prompt.capitalize()}",
                     "Dear [Recipient],",
-                    f"I hope this email finds you well. I am writing to {prompt.lower()}. Please let me know if you have any questions or need further details.",
+                    f"I hope this email finds you well. I am writing regarding your request to {prompt.lower()}. Please let me know if you need any additional information.",
                     "Best regards,",
                     "[Your Name]"
                 ]
