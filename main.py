@@ -976,7 +976,6 @@ from cachetools import TTLCache
 from functools import wraps
 from pymongo import MongoClient
 from datetime import datetime, timezone
-import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -1006,6 +1005,8 @@ CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")  # Hugging Face API token
+HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"  # Default to GPT-2
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0").strip()
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -1173,22 +1174,23 @@ async def generate_email(prompt):
         return ai_cache[cache_key]
 
     async with aiohttp.ClientSession() as session:
-        # Fetch available models
-        tags_url = f"{OLLAMA_BASE_URL}/api/tags"
-        logger.debug(f"Fetching models from {tags_url}")
+        # Try Ollama first
         try:
+            tags_url = f"{OLLAMA_BASE_URL}/api/tags"
+            logger.debug(f"Fetching models from {tags_url}")
             async with session.get(tags_url, timeout=aiohttp.ClientTimeout(total=10)) as model_response:
                 response_text = await model_response.text()
-                logger.debug(f"Model fetch response: {model_response.status}")
+                logger.debug(f"Ollama model fetch response: {model_response.status}")
                 if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {response_text}")
+                    logger.warning(f"Ollama failed to fetch models: {model_response.status}. Falling back to Hugging Face.")
+                    return await generate_email_with_hf(prompt, session)
+
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
-                logger.debug(f"Available models: {available_models}")
+                logger.debug(f"Ollama available models: {available_models}")
                 matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
-                logger.debug(f"Selected model: {matching_model}")
+                logger.debug(f"Ollama selected model: {matching_model}")
 
-            # Generate email
             payload = {
                 "model": matching_model,
                 "prompt": (
@@ -1201,22 +1203,72 @@ async def generate_email(prompt):
                 "stream": False
             }
             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to {generate_url}")
+            logger.debug(f"Sending request to Ollama at {generate_url}")
             async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 response_text = await response.text()
-                logger.debug(f"Generate response: {response.status}")
+                logger.debug(f"Ollama generate response: {response.status}")
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {response_text}")
+                    logger.warning(f"Ollama failed to generate email: {response.status}. Falling back to Hugging Face.")
+                    return await generate_email_with_hf(prompt, session)
+                
                 result = await response.json()
                 generated_email = result.get("response")
                 if not generated_email or "Could not generate" in generated_email:
-                    raise Exception("Model returned empty or invalid response")
+                    logger.warning("Ollama returned empty response. Falling back to Hugging Face.")
+                    return await generate_email_with_hf(prompt, session)
+                
                 ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully")
+                logger.info("Email generated successfully with Ollama")
                 return generated_email
+
         except Exception as e:
-            logger.error(f"Failed to generate email: {str(e)}", exc_info=True)
-            raise Exception(f"AI service error: {str(e)}")
+            logger.error(f"Ollama failed: {str(e)}. Falling back to Hugging Face.", exc_info=True)
+            return await generate_email_with_hf(prompt, session)
+
+async def generate_email_with_hf(prompt, session):
+    """Fallback to Hugging Face Inference API if Ollama fails."""
+    if not HF_API_TOKEN:
+        logger.error("Hugging Face API token not provided. Cannot generate email.")
+        raise Exception("Hugging Face API token not configured")
+
+    cache_key = f"generate_hf_{hash(prompt)}"
+    if cache_key in ai_cache:
+        logger.debug("Returning cached Hugging Face email generation")
+        return ai_cache[cache_key]
+
+    try:
+        payload = {
+            "inputs": (
+                f"Generate a professional email based on this request: '{prompt}'. "
+                f"Include a clear, concise subject line starting with 'Subject:', "
+                f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
+                f"and a professional closing (e.g., 'Best regards, [Your Name]'). TIMETOCOMPLETE"
+            ),
+            "parameters": {"max_length": 200, "temperature": 0.7}
+        }
+        headers = {
+            "Authorization": f"Bearer {HF_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
+        async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            response_text = await response.text()
+            logger.debug(f"Hugging Face response: {response.status}")
+            if response.status != 200:
+                raise Exception(f"Hugging Face API returned {response.status}: {response_text}")
+            
+            result = await response.json()
+            if isinstance(result, list) and len(result) > 0:
+                generated_email = result[0].get("generated_text", "").split("TIMETOCOMPLETE")[0].strip()
+                if not generated_email:
+                    raise Exception("Hugging Face returned empty response")
+                ai_cache[cache_key] = generated_email
+                logger.info("Email generated successfully with Hugging Face")
+                return generated_email
+            raise Exception("Invalid response format from Hugging Face")
+    except Exception as e:
+        logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
+        raise Exception(f"Both Ollama and Hugging Face failed: {str(e)}")
 
 async def summarize_email(email_body):
     cache_key = f"summarize_{hash(email_body)}"
@@ -1227,7 +1279,8 @@ async def summarize_email(email_body):
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
                 if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
+                    logger.warning(f"Failed to fetch models for summary: {model_response.status}")
+                    return email_body[:100] + '...'
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
                 matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
@@ -1239,14 +1292,15 @@ async def summarize_email(email_body):
             }
             async with session.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {await response.text()}")
+                    logger.warning(f"Failed to summarize email: {response.status}")
+                    return email_body[:100] + '...'
                 result = await response.json()
-                summary = result.get("response", "Could not summarize email")
+                summary = result.get("response", email_body[:100] + '...')
                 ai_cache[cache_key] = summary
                 return summary
     except Exception as e:
         logger.error(f"Failed to summarize email: {str(e)}")
-        raise
+        return email_body[:100] + '...'
 
 async def categorize_email(email_body):
     cache_key = f"categorize_{hash(email_body)}"
@@ -1257,7 +1311,8 @@ async def categorize_email(email_body):
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
                 if model_response.status != 200:
-                    raise Exception(f"Failed to fetch models: {model_response.status} {await model_response.text()}")
+                    logger.warning(f"Failed to fetch models for categorization: {model_response.status}")
+                    return "Other"
                 models_data = await model_response.json()
                 available_models = [model["name"] for model in models_data.get("models", [])]
                 matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
@@ -1269,14 +1324,15 @@ async def categorize_email(email_body):
             }
             async with session.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
                 if response.status != 200:
-                    raise Exception(f"AI API returned {response.status}: {await response.text()}")
+                    logger.warning(f"Failed to categorize email: {response.status}")
+                    return "Other"
                 result = await response.json()
                 category = result.get("response", "Other").strip()
                 ai_cache[cache_key] = category
                 return category
     except Exception as e:
         logger.error(f"Failed to categorize email: {str(e)}")
-        raise
+        return "Other"
 
 async def send_email(access_token, refresh_token, recipient, subject, message):
     try:
@@ -1442,7 +1498,7 @@ async def send_email_endpoint():
     except Exception as e:
         logger.error(f"Send email failed: {str(e)}", exc_info=True)
         if "Authentication failed" in str(e):
-            return jsonify({"error": str(e)}), 401
+            return jsonify({"error": str w(e)}), 401
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 @app.errorhandler(404)
