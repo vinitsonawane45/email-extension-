@@ -919,8 +919,8 @@ async def generate_email(prompt):
                 return generated_email
         except Exception as e:
             logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf 
-   
+            return await generate_email_with_hf(prompt, session)
+
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
         logger.warning("Hugging Face API token not provided, using fallback")
