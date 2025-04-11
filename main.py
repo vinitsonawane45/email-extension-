@@ -1024,7 +1024,7 @@ try:
     logger.info("Connected to MongoDB successfully")
 except Exception as e:
     logger.error(f"Failed to connect to MongoDB: {str(e)}", exc_info=True)
-    raise
+    raise SystemExit(f"Cannot start app: MongoDB connection failed: {str(e)}")
 
 # Caches
 email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
@@ -1045,6 +1045,7 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
     response.headers['Access-Control-Max-Age'] = '86400'
+    logger.debug(f"Added CORS headers for origin: {origin}")
     return response
 
 # Handle preflight OPTIONS requests
@@ -1059,46 +1060,34 @@ def handle_options(path):
     logger.debug(f"Handled OPTIONS request for {path} with origin {origin}")
     return response, 200
 
-# Health check endpoint
+# Root health check for Render
+@app.route('/', methods=['GET', 'HEAD'])
+def root_health_check():
+    logger.info("Root health check requested")
+    return jsonify({"status": "ok", "message": "Server is alive"}), 200
+
+# API health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    logger.info("Health check requested")
+    logger.info("API health check requested")
     return jsonify({"status": "ok", "message": "Server is running"}), 200
 
 # Helper Functions
 def get_credentials(access_token, refresh_token):
     try:
         if not all([access_token, refresh_token, TOKEN_URI, CLIENT_ID, CLIENT_SECRET]):
-            missing = [k for k, v in {
-                'access_token': access_token,
-                'refresh_token': refresh_token,
-                'token_uri': TOKEN_URI,
-                'client_id': CLIENT_ID,
-                'client_secret': CLIENT_SECRET
-            }.items() if not v]
+            missing = [k for k, v in {'access_token': access_token, 'refresh_token': refresh_token, 'token_uri': TOKEN_URI, 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET}.items() if not v]
             logger.error(f"Missing credential fields: {missing}")
             raise ValueError(f"Missing required credential fields: {missing}")
-
-        creds = Credentials(
-            token=access_token,
-            refresh_token=refresh_token,
-            token_uri=TOKEN_URI,
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET
-        )
-        
+        creds = Credentials(token=access_token, refresh_token=refresh_token, token_uri=TOKEN_URI, client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
         if creds.expired and creds.refresh_token:
             logger.debug("Access token expired, refreshing...")
             creds.refresh(Request())
             access_token = creds.token
             user = users_collection.find_one({"refreshToken": refresh_token})
             if user:
-                users_collection.update_one(
-                    {"email": user['email']},
-                    {"$set": {"accessToken": access_token, "updated_at": datetime.now(timezone.utc)}}
-                )
+                users_collection.update_one({"email": user['email']}, {"$set": {"accessToken": access_token, "updated_at": datetime.now(timezone.utc)}})
                 logger.info(f"Updated access token for {user['email']}")
-        
         service = build('gmail', 'v1', credentials=creds)
         service.users().getProfile(userId='me').execute()
         return creds, access_token
@@ -1120,261 +1109,33 @@ async def fetch_emails(access_token, refresh_token):
     try:
         creds, new_access_token = get_credentials(access_token, refresh_token)
         service = build('gmail', 'v1', credentials=creds)
-        
         logger.debug("Fetching Gmail messages")
-        results = service.users().messages().list(
-            userId='me',
-            maxResults=10,
-            labelIds=['INBOX']
-        ).execute()
-        
+        results = service.users().messages().list(userId='me', maxResults=10, labelIds=['INBOX']).execute()
         messages = results.get('messages', [])
         emails = []
-        
         for message in messages:
-            msg = service.users().messages().get(
-                userId='me',
-                id=message['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
-            ).execute()
-            
+            msg = service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['From', 'Subject', 'Date']).execute()
             headers = {h['name']: h['value'] for h in msg['payload']['headers']}
             email_data = {
-                'id': message['id'],
-                'from': headers.get('From', ''),
-                'subject': headers.get('Subject', ''),
-                'date': headers.get('Date', ''),
-                'snippet': msg.get('snippet', '')
+                'id': message['id'], 'from': headers.get('From', ''), 'subject': headers.get('Subject', ''),
+                'date': headers.get('Date', ''), 'snippet': msg.get('snippet', '')
             }
-            try:
-                email_data['category'] = await categorize_email(email_data['snippet'])
-                email_data['summary'] = await summarize_email(email_data['snippet'])
-            except Exception as e:
-                logger.warning(f"AI features unavailable: {str(e)}. Using defaults.")
-                email_data['category'] = 'Other'
-                email_data['summary'] = email_data['snippet'][:100] + '...'
             emails.append(email_data)
             save_email_to_db(email_data)
-        
         logger.info(f"Fetched {len(emails)} emails")
         return emails, new_access_token
-    
     except Exception as e:
         logger.error(f"Failed to fetch emails: {str(e)}", exc_info=True)
         raise
 
 def save_email_to_db(email_data):
     try:
-        existing_email = emails_collection.find_one({'id': email_data['id']})
-        if not existing_email:
-            email_data['created_at'] = datetime.now(timezone.utc)
-            email_data['updated_at'] = datetime.now(timezone.utc)
+        if not emails_collection.find_one({'id': email_data['id']}):
+            email_data.update({'created_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc)})
             emails_collection.insert_one(email_data)
             logger.debug(f"Saved email {email_data['id']} to DB")
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
-
-async def generate_email(prompt):
-    cache_key = f"generate_{hash(prompt)}"
-    if cache_key in ai_cache:
-        logger.debug("Returning cached email generation")
-        return ai_cache[cache_key]
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            tags_url = f"{OLLAMA_BASE_URL}/api/tags"
-            logger.debug(f"Fetching models from {tags_url}")
-            async with session.get(tags_url, timeout=aiohttp.ClientTimeout(total=10)) as model_response:
-                response_text = await model_response.text()
-                logger.debug(f"Ollama model fetch response: {model_response.status}")
-                if model_response.status != 200:
-                    logger.warning(f"Ollama failed to fetch models: {model_response.status}. Falling back to Hugging Face.")
-                    return await generate_email_with_hf(prompt, session)
-
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                logger.debug(f"Ollama available models: {available_models}")
-                matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
-                logger.debug(f"Ollama selected model: {matching_model}")
-
-            payload = {
-                "model": matching_model,
-                "prompt": (
-                    f"Generate a professional email based on this request: '{prompt}'. "
-                    f"Include a clear, concise subject line starting with 'Subject:', "
-                    f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
-                    f"and a professional closing (e.g., 'Best regards, [Your Name]'). "
-                    f"Format it as plain text with line breaks for readability."
-                ),
-                "stream": False
-            }
-            generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                response_text = await response.text()
-                logger.debug(f"Ollama generate response: {response.status}")
-                if response.status != 200:
-                    logger.warning(f"Ollama failed to generate email: {response.status}. Falling back to Hugging Face.")
-                    return await generate_email_with_hf(prompt, session)
-                
-                result = await response.json()
-                generated_email = result.get("response")
-                if not generated_email or "Could not generate" in generated_email:
-                    logger.warning("Ollama returned empty response. Falling back to Hugging Face.")
-                    return await generate_email_with_hf(prompt, session)
-                
-                ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully with Ollama")
-                return generated_email
-
-        except Exception as e:
-            logger.error(f"Ollama failed: {str(e)}. Falling back to Hugging Face.", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
-
-async def generate_email_with_hf(prompt, session):
-    if not HF_API_TOKEN:
-        logger.error("Hugging Face API token not provided. Cannot generate email.")
-        raise Exception("Hugging Face API token not configured")
-
-    cache_key = f"generate_hf_{hash(prompt)}"
-    if cache_key in ai_cache:
-        logger.debug("Returning cached Hugging Face email generation")
-        return ai_cache[cache_key]
-
-    try:
-        payload = {
-            "inputs": (
-                f"Generate a professional email based on this request: '{prompt}'. "
-                f"Include a clear, concise subject line starting with 'Subject:', "
-                f"a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, "
-                f"and a professional closing (e.g., 'Best regards, [Your Name]'). TIMETOCOMPLETE"
-            ),
-            "parameters": {"max_length": 200, "temperature": 0.7}
-        }
-        headers = {
-            "Authorization": f"Bearer {HF_API_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
-        async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            response_text = await response.text()
-            logger.debug(f"Hugging Face response: {response.status}")
-            if response.status != 200:
-                raise Exception(f"Hugging Face API returned {response.status}: {response_text}")
-            
-            result = await response.json()
-            if isinstance(result, list) and len(result) > 0:
-                generated_email = result[0].get("generated_text", "").split("TIMETOCOMPLETE")[0].strip()
-                if not generated_email:
-                    raise Exception("Hugging Face returned empty response")
-                ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully with Hugging Face")
-                return generated_email
-            raise Exception("Invalid response format from Hugging Face")
-    except Exception as e:
-        logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"Both Ollama and Hugging Face failed: {str(e)}")
-
-async def summarize_email(email_body):
-    cache_key = f"summarize_{hash(email_body)}"
-    if cache_key in ai_cache:
-        return ai_cache[cache_key]
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
-                if model_response.status != 200:
-                    logger.warning(f"Failed to fetch models for summary: {model_response.status}")
-                    return email_body[:100] + '...'
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
-
-            payload = {
-                "model": matching_model,
-                "prompt": f"Summarize this email in 2-3 sentences: {email_body}",
-                "stream": False
-            }
-            async with session.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
-                if response.status != 200:
-                    logger.warning(f"Failed to summarize email: {response.status}")
-                    return email_body[:100] + '...'
-                result = await response.json()
-                summary = result.get("response", email_body[:100] + '...')
-                ai_cache[cache_key] = summary
-                return summary
-    except Exception as e:
-        logger.error(f"Failed to summarize email: {str(e)}")
-        return email_body[:100] + '...'
-
-async def categorize_email(email_body):
-    cache_key = f"categorize_{hash(email_body)}"
-    if cache_key in ai_cache:
-        return ai_cache[cache_key]
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as model_response:
-                if model_response.status != 200:
-                    logger.warning(f"Failed to fetch models for categorization: {model_response.status}")
-                    return "Other"
-                models_data = await model_response.json()
-                available_models = [model["name"] for model in models_data.get("models", [])]
-                matching_model = next((m for m in available_models if m.startswith("mistral")), "mistral:latest")
-
-            payload = {
-                "model": matching_model,
-                "prompt": f"Categorize this email into one of these categories: [Work, Personal, Newsletter, Spam, Other]. Just respond with the category name: {email_body}",
-                "stream": False
-            }
-            async with session.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload, timeout=aiohttp.ClientTimeout(total=20)) as response:
-                if response.status != 200:
-                    logger.warning(f"Failed to categorize email: {response.status}")
-                    return "Other"
-                result = await response.json()
-                category = result.get("response", "Other").strip()
-                ai_cache[cache_key] = category
-                return category
-    except Exception as e:
-        logger.error(f"Failed to categorize email: {str(e)}")
-        return "Other"
-
-async def send_email(access_token, refresh_token, recipient, subject, message):
-    try:
-        creds, new_access_token = get_credentials(access_token, refresh_token)
-        service = build('gmail', 'v1', credentials=creds)
-        
-        email_msg = f"To: {recipient}\nSubject: {subject}\n\n{message}"
-        message_bytes = email_msg.encode('utf-8')
-        base64_bytes = base64.urlsafe_b64encode(message_bytes)
-        base64_message = base64_bytes.decode('utf-8')
-        
-        sent_msg = service.users().messages().send(
-            userId='me',
-            body={'raw': base64_message}
-        ).execute()
-        
-        save_sent_email_to_db(recipient, subject, message)
-        return sent_msg['id'], new_access_token
-    except Exception as e:
-        logger.error(f"Failed to send email: {str(e)}", exc_info=True)
-        raise
-
-def save_sent_email_to_db(recipient, subject, message):
-    try:
-        email_data = {
-            'type': 'sent',
-            'recipient': recipient,
-            'subject': subject,
-            'message': message,
-            'created_at': datetime.now(timezone.utc),
-            'updated_at': datetime.now(timezone.utc)
-        }
-        emails_collection.insert_one(email_data)
-        logger.debug(f"Saved sent email to DB: {subject}")
-    except Exception as e:
-        logger.error(f"Failed to save sent email to DB: {str(e)}")
 
 # Routes
 @app.route('/api/store-tokens', methods=['POST'])
@@ -1383,22 +1144,11 @@ def store_tokens():
     if not data or not all(k in data for k in ['email', 'accessToken', 'refreshToken']):
         logger.error("Missing required fields in store-tokens request")
         return jsonify({"error": "Missing required fields"}), 400
-    
     try:
         email = data['email']
-        user_data = {
-            "email": email,
-            "accessToken": data['accessToken'],
-            "refreshToken": data['refreshToken'],
-            "name": data.get('name', ''),
-            "lastLogin": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc)
-        }
-        users_collection.update_one(
-            {"email": email},
-            {"$set": user_data},
-            upsert=True
-        )
+        user_data = {"email": email, "accessToken": data['accessToken'], "refreshToken": data['refreshToken'],
+                     "name": data.get('name', ''), "lastLogin": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
         logger.info(f"Tokens stored for {email}")
         return jsonify({"status": "success", "message": "Tokens stored successfully"})
     except Exception as e:
@@ -1411,18 +1161,13 @@ def get_tokens():
     if not email:
         logger.error("Missing email parameter in get-tokens request")
         return jsonify({"error": "Missing email parameter"}), 400
-    
     try:
         user = users_collection.find_one({"email": email})
         if not user:
             logger.warning(f"No user found with email: {email}")
             return jsonify({"error": "User not found"}), 404
         logger.info(f"Retrieved tokens for {email}")
-        return jsonify({
-            "status": "success",
-            "accessToken": user.get("accessToken"),
-            "refreshToken": user.get("refreshToken")
-        })
+        return jsonify({"status": "success", "accessToken": user.get("accessToken"), "refreshToken": user.get("refreshToken")})
     except Exception as e:
         logger.error(f"Failed to retrieve tokens: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to retrieve tokens: {str(e)}"}), 500
@@ -1432,80 +1177,22 @@ def get_tokens():
 async def fetch_emails_endpoint():
     auth_header = request.headers.get('Authorization')
     refresh_token = request.headers.get('Refresh-Token')
-    
     if not auth_header or not auth_header.startswith('Bearer '):
         logger.error("Missing or invalid Authorization header")
         return jsonify({"error": "Missing or invalid Authorization header"}), 401
-    
     access_token = auth_header.split('Bearer ')[1].strip()
     if not refresh_token:
         logger.error("Missing Refresh-Token header")
         return jsonify({"error": "Missing Refresh-Token header"}), 401
-    
     try:
+        logger.info(f"Processing fetch-emails request with access_token: {access_token[:10]}...")
         emails, new_access_token = await fetch_emails(access_token, refresh_token)
-        return jsonify({
-            "status": "success",
-            "emails": emails,
-            "newAccessToken": new_access_token
-        })
+        return jsonify({"status": "success", "emails": emails, "newAccessToken": new_access_token})
     except Exception as e:
         logger.error(f"Fetch emails failed: {str(e)}", exc_info=True)
         if "Authentication failed" in str(e):
             return jsonify({"error": str(e)}), 401
         return jsonify({"error": f"Failed to fetch emails: {str(e)}"}), 500
-
-@app.route('/api/generate-email', methods=['POST'])
-@async_route
-async def generate_email_endpoint():
-    data = request.get_json()
-    if not data or 'prompt' not in data:
-        logger.error("Missing prompt in generate-email request")
-        return jsonify({"error": "Prompt is required"}), 400
-    
-    try:
-        email_draft = await generate_email(data['prompt'])
-        return jsonify({
-            "status": "success",
-            "emailDraft": email_draft
-        })
-    except Exception as e:
-        logger.error(f"Generate email failed: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
-
-@app.route('/api/send-email', methods=['POST'])
-@async_route
-async def send_email_endpoint():
-    auth_header = request.headers.get('Authorization')
-    refresh_token = request.headers.get('Refresh-Token')
-    data = request.get_json()
-
-    if not auth_header or not auth_header.startswith('Bearer '):
-        logger.error("Missing or invalid Authorization header")
-        return jsonify({"error": "Missing or invalid Authorization header"}), 401
-    access_token = auth_header.split('Bearer ')[1].strip()
-    if not refresh_token:
-        logger.error("Missing Refresh-Token header")
-        return jsonify({"error": "Missing Refresh-Token header"}), 401
-    if not data or not all(k in data for k in ['recipient', 'subject', 'message']):
-        logger.error("Missing required fields in send-email request")
-        return jsonify({"error": "Missing required fields"}), 400
-
-    try:
-        email_id, new_access_token = await send_email(
-            access_token, refresh_token,
-            data['recipient'], data['subject'], data['message']
-        )
-        return jsonify({
-            "status": "success",
-            "message_id": email_id,
-            "newAccessToken": new_access_token
-        })
-    except Exception as e:
-        logger.error(f"Send email failed: {str(e)}", exc_info=True)
-        if "Authentication failed" in str(e):
-            return jsonify({"error": str(e)}), 401
-        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 @app.errorhandler(404)
 def not_found(error):
