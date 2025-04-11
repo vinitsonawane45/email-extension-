@@ -1008,10 +1008,24 @@ async def fetch_emails_endpoint():
             return jsonify({"error": str(e)}), 401
         return jsonify({"error": f"Failed to fetch emails: {str(e)}"}), 500
 
+# @app.route('/api/generate-email', methods=['POST'])
+# @async_route
+# async def generate_email_endpoint():
+#     data = request.get_json()
+#     if not data or 'prompt' not in data:
+#         logger.error("Missing prompt in generate-email request")
+#         return jsonify({"error": "Prompt is required"}), 400
+#     try:
+#         logger.info(f"Generating email with prompt: {data['prompt']}")
+#         email_draft = await generate_email(data['prompt'])
+#         return jsonify({"status": "success", "emailDraft": email_draft})
+#     except Exception as e:
+#         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
+#         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
 @app.route('/api/generate-email', methods=['POST'])
 @async_route
 async def generate_email_endpoint():
-    data = request.get_json()
+    data = await request.get_json()  # FIXED: Added `await`
     if not data or 'prompt' not in data:
         logger.error("Missing prompt in generate-email request")
         return jsonify({"error": "Prompt is required"}), 400
@@ -1022,6 +1036,7 @@ async def generate_email_endpoint():
     except Exception as e:
         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to generate email: {str(e)}"}), 500
+
 
 @app.errorhandler(404)
 def not_found(error):
