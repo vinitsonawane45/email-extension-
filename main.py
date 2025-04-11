@@ -857,7 +857,6 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
-
 import asyncio
 import aiohttp
 import logging
@@ -903,7 +902,8 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/mixtralai/Mixtral-7B-Instruct-v0.1"  # Updated to Mistral-7B-Instruct-v0.1
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -1091,7 +1091,7 @@ async def generate_email_with_hf(prompt, session):
 
     try:
         payload = {
-            "inputs": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
+            "inputs": f"<|instruct|>Write a professional email to invite a colleague to a meeting next week. Use this format:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Insert concise body about the meeting here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1112,10 +1112,9 @@ async def generate_email_with_hf(prompt, session):
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
             
-            # Strip prompt and validate structure/relevance
-            prompt_prefix = payload["inputs"]
-            if generated_email.startswith(prompt_prefix):
-                generated_email = generated_email[len(prompt_prefix):].strip()
+            # Strip instruction tags and validate
+            if "<|instruct|>" in generated_email:
+                generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
             if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
                 logger.warning(f"Hugging Face returned improperly formatted or irrelevant email: {generated_email}")
                 # Enforce proper email draft
