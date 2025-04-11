@@ -1005,8 +1005,8 @@ CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
-HF_API_TOKEN = os.getenv("HF_API_TOKEN")  # Hugging Face API token
-HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"  # Default to GPT-2
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://vinitsonawane76:VPeMCZGJOKEmtgbM@cluster0.on6kpbz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0").strip()
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -1051,11 +1051,19 @@ def add_cors_headers(response):
 @app.route('/api/<path:path>', methods=['OPTIONS'])
 def handle_options(path):
     response = make_response()
-    response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+    origin = request.headers.get('Origin', '*')
+    response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
     response.headers['Access-Control-Max-Age'] = '86400'
+    logger.debug(f"Handled OPTIONS request for {path} with origin {origin}")
     return response, 200
+
+# Health check endpoint
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    logger.info("Health check requested")
+    return jsonify({"status": "ok", "message": "Server is running"}), 200
 
 # Helper Functions
 def get_credentials(access_token, refresh_token):
@@ -1174,7 +1182,6 @@ async def generate_email(prompt):
         return ai_cache[cache_key]
 
     async with aiohttp.ClientSession() as session:
-        # Try Ollama first
         try:
             tags_url = f"{OLLAMA_BASE_URL}/api/tags"
             logger.debug(f"Fetching models from {tags_url}")
@@ -1226,7 +1233,6 @@ async def generate_email(prompt):
             return await generate_email_with_hf(prompt, session)
 
 async def generate_email_with_hf(prompt, session):
-    """Fallback to Hugging Face Inference API if Ollama fails."""
     if not HF_API_TOKEN:
         logger.error("Hugging Face API token not provided. Cannot generate email.")
         raise Exception("Hugging Face API token not configured")
