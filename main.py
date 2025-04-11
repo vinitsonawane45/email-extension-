@@ -1027,7 +1027,7 @@ async def generate_email(prompt):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body tailored to the prompt, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
+                "prompt": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -1066,8 +1066,9 @@ async def generate_email_with_hf(prompt, session):
         return ai_cache[cache_key]
 
     try:
+        # Simplified prompt to reduce echoing
         payload = {
-            "inputs": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body tailored to the prompt, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
+            "inputs": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
             "parameters": {
                 "max_length": 300,
                 "temperature": 0.7,
@@ -1087,44 +1088,27 @@ async def generate_email_with_hf(prompt, session):
             if not generated_email:
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
+            
+            # Strip the prompt and enforce structure
+            prompt_prefix = f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]"
+            if generated_email.startswith(prompt_prefix):
+                generated_email = generated_email[len(prompt_prefix):].strip()
             # Validate and post-process email structure
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
+            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "Generate a professional email" in generated_email:
                 logger.warning(f"Hugging Face returned improperly formatted email: {generated_email}")
-                # Attempt to extract or enforce structure
+                # Enforce structure
+                formatted_email = [
+                    f"Subject: {prompt.capitalize()}",
+                    "Dear [Recipient],"
+                ]
+                # Extract body if possible, or use default
                 lines = generated_email.split("\n")
-                formatted_email = []
-                subject_found = False
-                greeting_found = False
-                closing_found = False
-                body_lines = []
-                
-                for line in lines:
-                    if line.startswith("Subject:") and not subject_found:
-                        formatted_email.append(line)
-                        subject_found = True
-                    elif line.startswith("Dear") and not greeting_found:
-                        formatted_email.append(line)
-                        greeting_found = True
-                    elif any(closing in line for closing in ["Best regards", "Sincerely", "Kind regards"]) and not closing_found:
-                        formatted_email.append(line)
-                        closing_found = True
-                        if "Your Name" not in line:
-                            formatted_email.append("[Your Name]")
-                    elif subject_found and greeting_found and not closing_found and line.strip():
-                        body_lines.append(line)
-                
-                # If structure is incomplete, enforce it
-                if not subject_found:
-                    formatted_email.insert(0, f"Subject: {prompt.capitalize()}")
-                if not greeting_found:
-                    formatted_email.append("Dear [Recipient],")
+                body_lines = [line.strip() for line in lines if line.strip() and not any(keyword in line for keyword in ["Subject:", "Dear", "Best regards", "Generate"])]
                 if body_lines:
                     formatted_email.extend(body_lines)
                 else:
-                    formatted_email.append(f"I am writing regarding {prompt.lower()}.")
-                if not closing_found:
-                    formatted_email.extend(["Best regards,", "[Your Name]"])
-                
+                    formatted_email.append(f"I am writing to invite you to a meeting next week to discuss our plans. Please let me know your availability.")
+                formatted_email.extend(["Best regards,", "[Your Name]"])
                 generated_email = "\n".join(formatted_email)
                 logger.debug(f"Post-processed email: {generated_email}")
             
