@@ -1251,7 +1251,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-base"  # Changed to facebook/bart-base
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/bart-base"
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -1422,7 +1422,7 @@ async def generate_email(prompt):
                 logger.info("Email generated successfully with Ollama")
                 return generated_email
         except Exception as e:
-            logger.error(f"Ollama failed: {str(e)}", exc_info=True)
+            logger.error(f"Ollama failed: {str(e)} - Falling back to Hugging Face", exc_info=True)
             return await generate_email_with_hf(prompt, session)
 
 async def generate_email_with_hf(prompt, session):
@@ -1449,16 +1449,19 @@ async def generate_email_with_hf(prompt, session):
         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
             response_text = await response.text()
-            if response.status != 200:
+            if response.status == 503:
+                logger.error(f"Hugging Face API unavailable (503): {response_text}")
+                raise Exception("Hugging Face API is temporarily unavailable (503 Service Unavailable)")
+            elif response.status != 200:
                 logger.error(f"Hugging Face API failed with status {response.status}: {response_text}")
-                raise Exception(f"Hugging Face API failed with status {response.status}: {response_text}")
+                raise Exception(f"Hugging Face API failed with status {response.status}")
             result = await response.json()
             logger.debug(f"Hugging Face response: {result}")
             generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
             if not generated_email:
                 logger.error("Hugging Face returned empty response")
                 raise Exception("Hugging Face returned empty response")
-             # Validate email structure
+            # Validate email structure
             if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
                 logger.error(f"Hugging Face response lacks proper email format: {generated_email}")
                 raise Exception("Hugging Face response lacks proper email format")
