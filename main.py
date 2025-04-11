@@ -656,7 +656,7 @@
 #         try:
 #             payload = {
 #                 "model": "gemma:2b",
-#                 "prompt": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+#                 "prompt": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
 #                 "stream": False,
 #                 "temperature": 0.7,
 #                 "max_tokens": 300
@@ -673,9 +673,9 @@
 #                 if not generated_email:
 #                     logger.warning("Ollama returned empty response")
 #                     return await generate_email_with_hf(prompt, session)
-#                 # Validate email structure
-#                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
-#                     logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
+#                 # Validate email structure and relevance
+#                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
+#                     logger.warning(f"Ollama returned improperly formatted or irrelevant email: {generated_email}")
 #                     return await generate_email_with_hf(prompt, session)
 #                 ai_cache[cache_key] = generated_email
 #                 logger.info("Email generated successfully with Ollama")
@@ -695,9 +695,8 @@
 #         return ai_cache[cache_key]
 
 #     try:
-#         # Simplified prompt to reduce echoing
 #         payload = {
-#             "inputs": f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]",
+#             "inputs": f"Write a professional email to invite a colleague to a meeting next week. Start with 'Subject: {prompt.capitalize()}', followed by 'Dear [Recipient],', a concise body about the meeting, and end with 'Best regards,\n[Your Name]'. Use plain text with line breaks.",
 #             "parameters": {
 #                 "max_length": 300,
 #                 "temperature": 0.7,
@@ -718,26 +717,20 @@
 #                 logger.error("Hugging Face returned empty response")
 #                 raise Exception("Hugging Face returned empty response")
             
-#             # Strip the prompt and enforce structure
-#             prompt_prefix = f"Subject: {prompt.capitalize()}\nDear [Recipient],\n[Body about '{prompt}']\nBest regards,\n[Your Name]"
+#             # Strip prompt and validate structure/relevance
+#             prompt_prefix = payload["inputs"]
 #             if generated_email.startswith(prompt_prefix):
 #                 generated_email = generated_email[len(prompt_prefix):].strip()
-#             # Validate and post-process email structure
-#             if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "Generate a professional email" in generated_email:
-#                 logger.warning(f"Hugging Face returned improperly formatted email: {generated_email}")
-#                 # Enforce structure
+#             if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or prompt.lower() not in generated_email.lower():
+#                 logger.warning(f"Hugging Face returned improperly formatted or irrelevant email: {generated_email}")
+#                 # Enforce proper email draft
 #                 formatted_email = [
 #                     f"Subject: {prompt.capitalize()}",
-#                     "Dear [Recipient],"
+#                     "Dear [Recipient],",
+#                     f"I hope this email finds you well. I would like to invite you to a meeting next week to discuss our upcoming plans. Please let me know your availability so we can schedule a suitable time.",
+#                     "Best regards,",
+#                     "[Your Name]"
 #                 ]
-#                 # Extract body if possible, or use default
-#                 lines = generated_email.split("\n")
-#                 body_lines = [line.strip() for line in lines if line.strip() and not any(keyword in line for keyword in ["Subject:", "Dear", "Best regards", "Generate"])]
-#                 if body_lines:
-#                     formatted_email.extend(body_lines)
-#                 else:
-#                     formatted_email.append(f"I am writing to invite you to a meeting next week to discuss our plans. Please let me know your availability.")
-#                 formatted_email.extend(["Best regards,", "[Your Name]"])
 #                 generated_email = "\n".join(formatted_email)
 #                 logger.debug(f"Post-processed email: {generated_email}")
             
@@ -909,7 +902,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_API_URL = "https://api-inference.huggingface.co/models/gpt2"
+HF_API_URL = "https://api-inference.huggingface.co/models/mixtralai/Mixtral-7B-Instruct-v0.1"  # Updated to Mistral-7B-Instruct-v0.1
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
@@ -1156,7 +1149,7 @@ def store_tokens():
         if mongo_connected:
             users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
         logger.info(f"Tokens stored for {email}")
-        return jsonify({"status": "success", "message": "Tokens stored successfully"})
+        return jsonify({"status": 전에success", "message": "Tokens stored successfully"})
     except Exception as e:
         logger.error(f"Failed to store tokens: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to store tokens: {str(e)}"}), 500
