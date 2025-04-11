@@ -906,17 +906,18 @@ async def generate_email(prompt):
     async with aiohttp.ClientSession() as session:
         try:
             payload = {
-                "model": "mistral:latest",
+                "model": "gemma:2b",  # Updated to use gemma:2b
                 "prompt": f"Generate a professional email based on this request: '{prompt}'. Include a clear, concise subject line starting with 'Subject:', a formal greeting (e.g., 'Dear [Recipient]'), a polite and context-specific body, and a professional closing (e.g., 'Best regards, [Your Name]'). Format as plain text with line breaks.",
                 "stream": False
             }
             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to Ollama at {generate_url}")
+            logger.debug(f"Sending request to Ollama at {generate_url} with payload: {payload}")
             async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status != 200:
-                    logger.warning(f"Ollama failed with status {response.status}")
+                    logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
                     return await generate_email_with_hf(prompt, session)
                 result = await response.json()
+                logger.debug(f"Ollama response: {result}")
                 generated_email = result.get("response", "")
                 if not generated_email:
                     logger.warning("Ollama returned empty response")
@@ -926,11 +927,7 @@ async def generate_email(prompt):
                 return generated_email
         except Exception as e:
             logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            hf_result = await generate_email_with_hf(prompt, session)
-            if not hf_result:
-                logger.error("Hugging Face also failed, falling back to default")
-                return generate_email_fallback(prompt)
-            return hf_result
+            return await generate_email_with_hf(prompt, session)
 
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
@@ -951,9 +948,10 @@ async def generate_email_with_hf(prompt, session):
         logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
             if response.status != 200:
-                logger.warning(f"Hugging Face failed with status {response.status}")
+                logger.warning(f"Hugging Face failed with status {response.status}: {await response.text()}")
                 return generate_email_fallback(prompt)
             result = await response.json()
+            logger.debug(f"Hugging Face response: {result}")
             generated_email = result[0].get("generated_text", "").strip() if result else ""
             if not generated_email:
                 logger.warning("Hugging Face returned empty response")
@@ -1054,9 +1052,9 @@ async def generate_email_endpoint():
 
         logger.info(f"Generating email with prompt: {prompt}")
         email_draft = await generate_email(prompt)
-        if not email_draft:
-            logger.error("Email generation returned no result")
-            email_draft = generate_email_fallback(prompt)
+        if email_draft is None:
+            logger.error("Email generation returned None")
+            return jsonify({"error": "Failed to generate email: No response from AI services"}), 500
         return jsonify({"status": "success", "emailDraft": email_draft})
     except Exception as e:
         logger.error(f"Generate email failed: {str(e)}", exc_info=True)
