@@ -857,6 +857,7 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
+
 import asyncio
 import aiohttp
 import logging
@@ -1149,7 +1150,7 @@ def store_tokens():
         if mongo_connected:
             users_collection.update_one({"email": email}, {"$set": user_data}, upsert=True)
         logger.info(f"Tokens stored for {email}")
-        return jsonify({"status": 전에success", "message": "Tokens stored successfully"})
+        return jsonify({"status": "success", "message": "Tokens stored successfully"})
     except Exception as e:
         logger.error(f"Failed to store tokens: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to store tokens: {str(e)}"}), 500
