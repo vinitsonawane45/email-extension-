@@ -713,7 +713,6 @@
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
 
-
 import asyncio
 import aiohttp
 import logging
@@ -932,7 +931,7 @@ async def generate_email(prompt):
 async def generate_email_with_hf(prompt, session):
     if not HF_API_TOKEN:
         logger.warning("Hugging Face API token not provided, using fallback")
-        return generate_email_fallback(prompt)  # No await, as it's sync
+        return generate_email_fallback(prompt)
 
     cache_key = f"generate_hf_{hash(prompt)}"
     if cache_key in ai_cache:
@@ -949,19 +948,19 @@ async def generate_email_with_hf(prompt, session):
         async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
             if response.status != 200:
                 logger.warning(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                return generate_email_fallback(prompt)  # No await
+                return generate_email_fallback(prompt)
             result = await response.json()
             logger.debug(f"Hugging Face response: {result}")
             generated_email = result[0].get("generated_text", "").strip() if result else ""
             if not generated_email:
                 logger.warning("Hugging Face returned empty response")
-                return generate_email_fallback(prompt)  # No await
+                return generate_email_fallback(prompt)
             ai_cache[cache_key] = generated_email
             logger.info("Email generated successfully with Hugging Face")
             return generated_email
     except Exception as e:
         logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        return generate_email_fallback(prompt)  # No await
+        return generate_email_fallback(prompt)
 
 def generate_email_fallback(prompt):
     logger.info("Using fallback email generation")
@@ -1036,7 +1035,9 @@ async def generate_email_endpoint():
             logger.error("No request body provided")
             return jsonify({"error": "Request body is empty"}), 400
         
-        data = await request.get_json(silent=True)
+        # Remove await, as get_json is synchronous
+        data = request.get_json(silent=True)
+        logger.debug(f"Raw request data: {request.data.decode('utf-8')}")
         if data is None or not isinstance(data, dict):
             logger.error(f"Invalid JSON in request body: {request.data.decode('utf-8')}")
             return jsonify({"error": "Invalid JSON format"}), 400
