@@ -874,6 +874,7 @@ from pymongo import MongoClient
 from datetime import datetime, timezone
 import time
 import random
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -902,16 +903,16 @@ CORS(app, resources={
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama-on-render.onrender.com")
+OLLAMA_BASE_URL = "https://ollama-on-render.onrender.com"
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.1"
+MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"  # Switched to a more reliable model
 HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
 EMAIL_CACHE_TTL = int(os.getenv("EMAIL_CACHE_TTL", 60))
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", 300))
 
-# Database Configuration (optional fallback)
+# Database Configuration
 mongo_connected = False
 try:
     if not MONGO_URI:
@@ -923,7 +924,7 @@ try:
         users_collection = db.users
         emails_collection = db.emails
         templates_collection = db.templates
-        client.server_info()  # Test connection
+        client.server_info()
         mongo_connected = True
         logger.info("Connected to MongoDB successfully")
 except Exception as e:
@@ -934,7 +935,7 @@ except Exception as e:
 email_cache = TTLCache(maxsize=128, ttl=EMAIL_CACHE_TTL)
 ai_cache = TTLCache(maxsize=256, ttl=AI_CACHE_TTL)
 
-# Middleware to ensure CORS headers on all responses
+# CORS Middleware
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get('Origin')
@@ -952,7 +953,7 @@ def add_cors_headers(response):
     logger.debug(f"Added CORS headers for origin: {origin}")
     return response
 
-# Handle preflight OPTIONS requests
+# Handle OPTIONS requests
 @app.route('/api/<path:path>', methods=['OPTIONS'])
 def handle_options(path):
     response = make_response()
@@ -961,16 +962,15 @@ def handle_options(path):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Authorization, Refresh-Token, Content-Type'
     response.headers['Access-Control-Max-Age'] = '86400'
-    logger.debug(f"Handled OPTIONS request for {path} with origin {origin}")
+    logger.debug(f"Handled OPTIONS request for {path}")
     return response, 200
 
-# Root health check for Render
+# Health Checks
 @app.route('/', methods=['GET', 'HEAD'])
 def root_health_check():
     logger.info("Root health check requested")
     return jsonify({"status": "ok", "message": "Server is alive", "mongo_connected": mongo_connected}), 200
 
-# API health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health_check():
     logger.info("API health check requested")
@@ -1043,102 +1043,142 @@ def save_email_to_db(email_data):
     except Exception as e:
         logger.error(f"Failed to save email to DB: {str(e)}")
 
-# Basic NLP/Keyword Extraction Function
+# Keyword Extraction for Fallback
 def extract_keywords(prompt):
     common_words = {'a', 'an', 'the', 'to', 'for', 'on', 'in', 'with', 'and', 'is', 'are'}
     words = prompt.lower().split()
     keywords = [word for word in words if word not in common_words and len(word) > 2]
-    return keywords[:2]  # Take up to 2 key words for brevity
+    return keywords[:2]
 
-async def generate_email(prompt):
-    cache_key = f"generate_{hash(prompt)}"
+# Ollama Email Generation with Retry
+async def generate_email_with_ollama(prompt, session, retries=3, backoff=2):
+    cache_key = f"generate_ollama_{hash(prompt)}"
     if cache_key in ai_cache:
-        logger.debug("Returning cached email generation")
+        logger.debug("Returning cached Ollama email")
         return ai_cache[cache_key]
 
-    async with aiohttp.ClientSession() as session:
+    for attempt in range(retries):
         try:
             payload = {
                 "model": "gemma:2b",
-                "prompt": f"Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Concise body relevant to '{prompt}']\nBest regards,\n[Your Name]\nUse plain text with line breaks.",
+                "prompt": f"Write a professional email based on this request: '{prompt}'. Format it as plain text with line breaks:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Body: Keep it concise, relevant to '{prompt}', professional]\nBest regards,\n[Your Name]",
                 "stream": False,
                 "temperature": 0.7,
                 "max_tokens": 300
             }
             generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            logger.debug(f"Attempt {attempt + 1}: Sending request to Ollama at {generate_url}")
+            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 if response.status != 200:
-                    logger.warning(f"Ollama failed with status {response.status}: {await response.text()}")
-                    return await generate_email_with_hf(prompt, session)
+                    logger.warning(f"Ollama attempt {attempt + 1} failed with status {response.status}: {await response.text()}")
+                    if attempt == retries - 1:
+                        raise Exception(f"Ollama failed after {retries} attempts")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
                 result = await response.json()
                 logger.debug(f"Ollama response: {result}")
                 generated_email = result.get("response", "").strip()
                 if not generated_email:
-                    logger.warning("Ollama returned empty response")
-                    return await generate_email_with_hf(prompt, session)
-                # Validate structure only
+                    logger.warning(f"Ollama returned empty response on attempt {attempt + 1}")
+                    if attempt == retries - 1:
+                        raise Exception("Ollama returned empty response")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
-                    logger.warning(f"Ollama returned improperly formatted email: {generated_email}")
-                    return await generate_email_with_hf(prompt, session)
+                    logger.warning(f"Ollama returned improperly formatted email on attempt {attempt + 1}: {generated_email}")
+                    if attempt == retries - 1:
+                        raise Exception("Ollama returned invalid email format")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
                 ai_cache[cache_key] = generated_email
                 logger.info("Email generated successfully with Ollama")
                 return generated_email
         except Exception as e:
-            logger.error(f"Ollama failed: {str(e)}", exc_info=True)
-            return await generate_email_with_hf(prompt, session)
+            logger.error(f"Ollama attempt {attempt + 1} failed: {str(e)}")
+            if attempt == retries - 1:
+                raise Exception(f"Ollama failed: {str(e)}")
+            await asyncio.sleep(backoff * (2 ** attempt))
+    raise Exception("Ollama failed after retries")
 
-async def generate_email_with_hf(prompt, session):
+# Hugging Face Email Generation with Retry
+async def generate_email_with_hf(prompt, session, retries=3, backoff=2):
     if not HF_API_TOKEN:
         logger.error("Hugging Face API token not provided")
         raise Exception("Hugging Face API token not provided")
 
     cache_key = f"generate_hf_{hash(prompt)}"
     if cache_key in ai_cache:
-        logger.debug("Returning cached Hugging Face email generation")
+        logger.debug("Returning cached Hugging Face email")
         return ai_cache[cache_key]
 
-    try:
-        start_time = time.time()
-        payload = {
-            "inputs": f"<|instruct|>Generate a professional email for this request: '{prompt}'. Format it as:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Write a concise body relevant to '{prompt}' here]\nBest regards,\n[Your Name]\nUse plain text with line breaks.<|endinstruct|>",
-            "parameters": {
-                "max_length": 300,
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "do_sample": True
+    for attempt in range(retries):
+        try:
+            payload = {
+                "inputs": f"Generate a professional email based on this request: '{prompt}'. Format it as plain text with line breaks:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Body: Keep it concise, relevant to '{prompt}', professional]\nBest regards,\n[Your Name]",
+                "parameters": {
+                    "max_new_tokens": 300,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "do_sample": True,
+                    "return_full_text": False
+                }
             }
-        }
-        headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
-        logger.debug(f"Sending request to Hugging Face at {HF_API_URL}")
-        async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            if response.status != 200:
-                logger.error(f"Hugging Face failed with status {response.status}: {await response.text()}")
-                raise Exception(f"Hugging Face API failed with status {response.status}")
-            result = await response.json()
-            logger.debug(f"Hugging Face response: {result}")
-            generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
-            if not generated_email:
-                logger.error("Hugging Face returned empty response")
-                raise Exception("Hugging Face returned empty response")
-            
-            # Strip instruction tags
-            if "<|instruct|>" in generated_email:
-                generated_email = generated_email.split("<|endinstruct|>")[0].split("<|instruct|>")[1].strip()
-            
-            # Validate structure only, trust content relevance
-            if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]) or "[Write" in generated_email or len(generated_email.split('\n')) < 4:
-                logger.warning(f"Hugging Face returned improperly formatted or incomplete email: {generated_email}")
-                # Advanced fallback with keyword extraction
+            headers = {"Authorization": f"Bearer {HF_API_TOKEN}", "Content-Type": "application/json"}
+            logger.debug(f"Attempt {attempt + 1}: Sending request to Hugging Face at {HF_API_URL}")
+            async with session.post(HF_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                if response.status != 200:
+                    logger.warning(f"Hugging Face attempt {attempt + 1} failed with status {response.status}: {await response.text()}")
+                    if attempt == retries - 1:
+                        raise Exception(f"Hugging Face failed with status {response.status}")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
+                result = await response.json()
+                logger.debug(f"Hugging Face response: {result}")
+                generated_email = result[0].get("generated_text", "").strip() if isinstance(result, list) and result else ""
+                if not generated_email:
+                    logger.warning(f"Hugging Face returned empty response on attempt {attempt + 1}")
+                    if attempt == retries - 1:
+                        raise Exception("Hugging Face returned empty response")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
+                if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
+                    logger.warning(f"Hugging Face returned improperly formatted email on attempt {attempt + 1}: {generated_email}")
+                    if attempt == retries - 1:
+                        raise Exception("Hugging Face returned invalid email format")
+                    await asyncio.sleep(backoff * (2 ** attempt))
+                    continue
+                ai_cache[cache_key] = generated_email
+                logger.info("Email generated successfully with Hugging Face")
+                return generated_email
+        except Exception as e:
+            logger.error(f"Hugging Face attempt {attempt + 1} failed: {str(e)}")
+            if attempt == retries - 1:
+                raise Exception(f"Hugging Face failed: {str(e)}")
+            await asyncio.sleep(backoff * (2 ** attempt))
+    raise Exception("Hugging Face failed after retries")
+
+# Main Email Generation Function
+async def generate_email(prompt):
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Try Ollama first
+            return await generate_email_with_ollama(prompt, session)
+        except Exception as e:
+            logger.warning(f"Ollama failed, falling back to Hugging Face: {str(e)}")
+            try:
+                # Try Hugging Face
+                return await generate_email_with_hf(prompt, session)
+            except Exception as e:
+                logger.error(f"Hugging Face failed, using fallback: {str(e)}")
+                # Fallback
                 keywords = extract_keywords(prompt)
                 greetings = [
+                    "Dear [Recipient],",
                     "Hello [Recipient],",
                     "Hi [Recipient],",
-                    "Dear [Recipient], I trust you’re doing well.",
                     "Greetings [Recipient],"
                 ]
                 closing_actions = ["your thoughts", "your availability", "your input", "any feedback"]
-                
                 if len(keywords) == 0:
                     body_templates = [
                         f"I’m reaching out about {prompt.lower()}. Could you please let me know your next steps?",
@@ -1154,7 +1194,6 @@ async def generate_email_with_hf(prompt, session):
                         f"I’m writing to address {keywords[0]} and {keywords[1]}. Could you provide {random.choice(closing_actions)} at your earliest convenience?",
                         f"I’d appreciate your perspective on {keywords[0]} and {keywords[1]}. Please let me know what you think."
                     ]
-                
                 formatted_email = [
                     f"Subject: {prompt.capitalize()}",
                     random.choice(greetings),
@@ -1163,15 +1202,8 @@ async def generate_email_with_hf(prompt, session):
                     "[Your Name]"
                 ]
                 generated_email = "\n".join(formatted_email)
-                logger.debug(f"Post-processed email with keywords {keywords}: {generated_email}")
-            
-            ai_cache[cache_key] = generated_email
-            elapsed_time = time.time() - start_time
-            logger.info(f"Email generated successfully with Hugging Face in {elapsed_time:.2f} seconds")
-            return generated_email
-    except Exception as e:
-        logger.error(f"Failed to generate email with Hugging Face: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate email with Hugging Face: {str(e)}")
+                logger.info("Email generated using fallback")
+                return generated_email
 
 # Routes
 @app.route('/api/store-tokens', methods=['POST'])
@@ -1225,7 +1257,7 @@ async def fetch_emails_endpoint():
         logger.error("Missing Refresh-Token header")
         return jsonify({"error": "Missing Refresh-Token header"}), 401
     try:
-        logger.info(f"Processing fetch-emails request with access_token: {access_token[:10]}...")
+        logger.info(f"Processing fetch-emails request")
         emails, new_access_token = await fetch_emails(access_token, refresh_token)
         return jsonify({"status": "success", "emails": emails, "newAccessToken": new_access_token})
     except Exception as e:
@@ -1243,7 +1275,6 @@ async def generate_email_endpoint():
             return jsonify({"error": "Request body is empty"}), 400
         
         data = request.get_json(silent=True)
-        logger.debug(f"Raw request data: {request.data.decode('utf-8')}")
         if data is None or not isinstance(data, dict):
             logger.error(f"Invalid JSON in request body: {request.data.decode('utf-8')}")
             return jsonify({"error": "Invalid JSON format"}), 400
