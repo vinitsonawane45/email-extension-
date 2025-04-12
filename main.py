@@ -573,6 +573,10 @@
 #     logger.info(f"Starting Flask server on port {port}, debug={debug}")
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
+
+
+
+
 import asyncio
 import aiohttp
 import logging
@@ -582,6 +586,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 import base64
+from email.mime.text import MIMEText
 from dotenv import load_dotenv
 import os
 from cachetools import TTLCache
@@ -800,14 +805,22 @@ async def send_email(access_token, refresh_token, recipient, subject, message):
     try:
         creds, new_access_token = get_credentials(access_token, refresh_token)
         service = build('gmail', 'v1', credentials=creds)
-        email_msg = f"To: {recipient}\nSubject: {subject}\n\n{message}"
-        message_bytes = email_msg.encode('utf-8')
-        base64_bytes = base64.urlsafe_b64encode(message_bytes)
-        base64_message = base64_bytes.decode('utf-8')
+        
+        # Create MIMEText object for proper email formatting
+        mime_message = MIMEText(message)
+        mime_message['to'] = recipient
+        mime_message['subject'] = subject
+        mime_message['from'] = 'me'  # Gmail API uses authenticated user
+        
+        # Encode the message to base64url
+        raw_message = base64.urlsafe_b64encode(mime_message.as_bytes()).decode('utf-8')
+        
+        # Send the email
         sent_msg = service.users().messages().send(
             userId='me',
-            body={'raw': base64_message}
+            body={'raw': raw_message}
         ).execute()
+        
         save_sent_email_to_db(recipient, subject, message)
         logger.info(f"Sent email to {recipient} with subject: {subject}")
         return sent_msg['id'], new_access_token
