@@ -856,6 +856,9 @@
 #     logger.info(f"Starting Flask server on port {port}, debug={debug}")
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
+
+
+
 import asyncio
 import aiohttp
 import logging
@@ -1020,7 +1023,7 @@ async def fetch_emails(access_token, refresh_token):
         emails = []
         for message in messages:
             msg = service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['From', 'Subject', 'Date']).execute()
-            headers = {h['name']: h['value'] for h in msgVERSATION_ID_1['payload']['headers']}
+            headers = {h['name']: h['value'] for h in msg['payload']['headers']}
             email_data = {
                 'id': message['id'], 'from': headers.get('From', ''), 'subject': headers.get('Subject', ''),
                 'date': headers.get('Date', ''), 'snippet': msg.get('snippet', '')
@@ -1060,7 +1063,7 @@ async def generate_email_with_groq(prompt, session, retries=3, backoff=2):
     for attempt in range(retries):
         try:
             payload = {
-                "model": "llama-3.2-11b-text-preview",
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
                 "messages": [
                     {
                         "role": "user",
