@@ -856,7 +856,6 @@
 #     logger.info(f"Starting Flask server on port {port}, debug={debug}")
 #     app.run(host="0.0.0.0", port=port, debug=debug)
 
-
 import asyncio
 import aiohttp
 import logging
@@ -903,9 +902,10 @@ CORS(app, resources={
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-OLLAMA_BASE_URL = "https://ollama-on-render.onrender.com"
+GROQ_API_KEY = "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"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"  # Switched to a more reliable model
+MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ai_email_agent"
@@ -1020,7 +1020,7 @@ async def fetch_emails(access_token, refresh_token):
         emails = []
         for message in messages:
             msg = service.users().messages().get(userId='me', id=message['id'], format='metadata', metadataHeaders=['From', 'Subject', 'Date']).execute()
-            headers = {h['name']: h['value'] for h in msg['payload']['headers']}
+            headers = {h['name']: h['value'] for h in msgVERSATION_ID_1['payload']['headers']}
             email_data = {
                 'id': message['id'], 'from': headers.get('From', ''), 'subject': headers.get('Subject', ''),
                 'date': headers.get('Date', ''), 'snippet': msg.get('snippet', '')
@@ -1050,55 +1050,63 @@ def extract_keywords(prompt):
     keywords = [word for word in words if word not in common_words and len(word) > 2]
     return keywords[:2]
 
-# Ollama Email Generation with Retry
-async def generate_email_with_ollama(prompt, session, retries=3, backoff=2):
-    cache_key = f"generate_ollama_{hash(prompt)}"
+# Groq Email Generation with Retry
+async def generate_email_with_groq(prompt, session, retries=3, backoff=2):
+    cache_key = f"generate_groq_{hash(prompt)}"
     if cache_key in ai_cache:
-        logger.debug("Returning cached Ollama email")
+        logger.debug("Returning cached Groq email")
         return ai_cache[cache_key]
 
     for attempt in range(retries):
         try:
             payload = {
-                "model": "gemma:2b",
-                "prompt": f"Write a professional email based on this request: '{prompt}'. Format it as plain text with line breaks:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Body: Keep it concise, relevant to '{prompt}', professional]\nBest regards,\n[Your Name]",
-                "stream": False,
+                "model": "llama-3.2-11b-text-preview",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Write a professional email based on this request: '{prompt}'. Format it as plain text with line breaks:\nSubject: {prompt.capitalize()}\nDear [Recipient],\n[Body: Keep it concise, relevant to '{prompt}', professional]\nBest regards,\n[Your Name]"
+                    }
+                ],
                 "temperature": 0.7,
-                "max_tokens": 300
+                "max_tokens": 300,
+                "top_p": 0.9
             }
-            generate_url = f"{OLLAMA_BASE_URL}/api/generate"
-            logger.debug(f"Attempt {attempt + 1}: Sending request to Ollama at {generate_url}")
-            async with session.post(generate_url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            logger.debug(f"Attempt {attempt + 1}: Sending request to Groq at {GROQ_API_URL}")
+            async with session.post(GROQ_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 if response.status != 200:
-                    logger.warning(f"Ollama attempt {attempt + 1} failed with status {response.status}: {await response.text()}")
+                    logger.warning(f"Groq attempt {attempt + 1} failed with status {response.status}: {await response.text()}")
                     if attempt == retries - 1:
-                        raise Exception(f"Ollama failed after {retries} attempts")
+                        raise Exception(f"Groq failed with status {response.status}")
                     await asyncio.sleep(backoff * (2 ** attempt))
                     continue
                 result = await response.json()
-                logger.debug(f"Ollama response: {result}")
-                generated_email = result.get("response", "").strip()
+                logger.debug(f"Groq response: {result}")
+                generated_email = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 if not generated_email:
-                    logger.warning(f"Ollama returned empty response on attempt {attempt + 1}")
+                    logger.warning(f"Groq returned empty response on attempt {attempt + 1}")
                     if attempt == retries - 1:
-                        raise Exception("Ollama returned empty response")
+                        raise Exception("Groq returned empty response")
                     await asyncio.sleep(backoff * (2 ** attempt))
                     continue
                 if not all(keyword in generated_email for keyword in ["Subject:", "Dear", "Best regards"]):
-                    logger.warning(f"Ollama returned improperly formatted email on attempt {attempt + 1}: {generated_email}")
+                    logger.warning(f"Groq returned improperly formatted email on attempt {attempt + 1}: {generated_email}")
                     if attempt == retries - 1:
-                        raise Exception("Ollama returned invalid email format")
+                        raise Exception("Groq returned invalid email format")
                     await asyncio.sleep(backoff * (2 ** attempt))
                     continue
                 ai_cache[cache_key] = generated_email
-                logger.info("Email generated successfully with Ollama")
+                logger.info("Email generated successfully with Groq")
                 return generated_email
         except Exception as e:
-            logger.error(f"Ollama attempt {attempt + 1} failed: {str(e)}")
+            logger.error(f"Groq attempt {attempt + 1} failed: {str(e)}")
             if attempt == retries - 1:
-                raise Exception(f"Ollama failed: {str(e)}")
+                raise Exception(f"Groq failed: {str(e)}")
             await asyncio.sleep(backoff * (2 ** attempt))
-    raise Exception("Ollama failed after retries")
+    raise Exception("Groq failed after retries")
 
 # Hugging Face Email Generation with Retry
 async def generate_email_with_hf(prompt, session, retries=3, backoff=2):
@@ -1161,10 +1169,10 @@ async def generate_email_with_hf(prompt, session, retries=3, backoff=2):
 async def generate_email(prompt):
     async with aiohttp.ClientSession() as session:
         try:
-            # Try Ollama first
-            return await generate_email_with_ollama(prompt, session)
+            # Try Groq first
+            return await generate_email_with_groq(prompt, session)
         except Exception as e:
-            logger.warning(f"Ollama failed, falling back to Hugging Face: {str(e)}")
+            logger.warning(f"Groq failed, falling back to Hugging Face: {str(e)}")
             try:
                 # Try Hugging Face
                 return await generate_email_with_hf(prompt, session)
