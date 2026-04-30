@@ -4,7 +4,7 @@ A powerful Firefox add-on that transforms how you manage and interact with your 
 
 ---
 
-## 🌟 Features
+## 🌟 Feature
 
 ### 📬 Email Management
 - **Fetch Gmail Integration** - Securely connect and fetch emails from your Gmail account
