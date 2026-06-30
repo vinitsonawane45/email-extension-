@@ -1,4 +1,4 @@
-# Email Extension 📧
+# AI Email Extension 📧
 
 A powerful Firefox add-on that transforms how you manage and interact with your Gmail. This extension allows you to fetch emails from your Gmail account, get AI-powered summaries with text-to-speech, auto-generate professional replies, and send emails directly from the extension interface.
 
