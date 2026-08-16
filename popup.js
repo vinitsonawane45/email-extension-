@@ -79,7 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
         darkModeToggle.querySelector('.dark-icon').style.display = isDarkMode ? 'none' : 'inline';
         darkModeToggle.querySelector('.light-icon').style.display = isDarkMode ? 'inline' : 'none';
     });
-
     // Profile Dropdown
     function initProfileDropdown() {
         profileIcon.addEventListener('click', (e) => {
